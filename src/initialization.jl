@@ -30,9 +30,6 @@ end
 
 config = Config()  # Uses default values
 
-
-
-
 mutable struct SimulationState <: AbstractState
     x_coords::Vector{Float64}
     y_coords::Vector{Float64}
@@ -57,7 +54,6 @@ struct MinimalState <: AbstractState
     box_size::Int
     W::Matrix{Float64}
     K::Matrix{Float64}
-    
 end
 
 function create_minimal_state(state::SimulationState)
@@ -145,6 +141,7 @@ Outputs:
     - A normalized W matrix with dimensions 360x360.
 """
 function load_w_matrix(file_path)
+    println(file_path)
     # Read W matrix as a vector
     file = open(file_path, "r")
     raw_data = Float64[]  # Store all the values in a flat array

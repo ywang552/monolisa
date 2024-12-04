@@ -281,15 +281,15 @@ Arguments:
 Returns:
 - The final SimulationState.
 """
-function run(fn; log_path=pwd()*"\\"*"logs\\", save_path=pwd()*"\\"*"saved_states\\minimal_states\\")
+function run(fn; log_path=pwd()*"/"*"logs/", save_path=pwd()*"/"*"saved_states/minimal_states/")
     # Initialize simulation state
     state = initialize_simulation(config)
 
     cc = 0
     boix = 1
     num_monomers = state.MN
-    pn = "$(length(state.x_coords))_$(basename(config.file_path)[1:end-4])"
-    log_path = log_path*"$(pn).log"
+
+    log_path = log_path*"$(basename(config.file_path)[1:end-4]).log"
     log_message(log_path, "Simulation started at: $(Dates.now())")
     log_message(log_path, "Configuration: $(config)")
 
@@ -303,7 +303,7 @@ function run(fn; log_path=pwd()*"\\"*"logs\\", save_path=pwd()*"\\"*"saved_state
     end
 
     # Set up progress bar
-    p = Progress(num_monomers, desc="Simulating Monomers")
+    p = Progress(num_monomers, desc="Simulating Monomers", dt = 7200.0)
 
     try
         while length(state.x_coords) < num_monomers
@@ -351,6 +351,10 @@ function run(fn; log_path=pwd()*"\\"*"logs\\", save_path=pwd()*"\\"*"saved_state
             end
         end
     catch e
+        threshold = 10  # Example: Minimum 3 monomers per grid region
+        state = remove_small_islands!(state, threshold)
+        placed_monomer_number = length(state.x_coords)
+        pn = "$(placed_monomer_number)_$(basename(config.file_path)[1:end-4])"
         # Save the current state as MinimalState on error
         println("Error occurred: ", e)
         log_message(log_path, "ERROR at $(Dates.now()): $e")
@@ -359,6 +363,10 @@ function run(fn; log_path=pwd()*"\\"*"logs\\", save_path=pwd()*"\\"*"saved_state
         println("Minimal state saved after error.")
         rethrow(e)  # Re-throw the error after saving
     finally
+        threshold = 10  # Example: Minimum 3 monomers per grid region
+        state = remove_small_islands!(state, threshold)
+        placed_monomer_number = length(state.x_coords)
+        pn = "$(placed_monomer_number)_$(basename(config.file_path)[1:end-4])"
         # Save final results as MinimalState
         minimal_state = create_minimal_state(state)
         log_message(log_path, "Simulation completed at: $(Dates.now())")

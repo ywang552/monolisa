@@ -1,3 +1,17 @@
-plots/
+# Logs
 logs/
-saved_states/full_states/
+
+# Saved states
+saved_states/
+
+# Temporary job files
+*.temp
+
+# Build artifacts
+build/
+*.o
+*.so
+
+# Julia package environments
+Manifest.toml
+Project.toml
