@@ -15,3 +15,6 @@ build/
 # Julia package environments
 Manifest.toml
 Project.toml
+
+# Plots
+plots/

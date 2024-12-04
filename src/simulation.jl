@@ -303,7 +303,7 @@ function run(fn; log_path=pwd()*"/"*"logs/", save_path=pwd()*"/"*"saved_states/m
     end
 
     # Set up progress bar
-    p = Progress(num_monomers, desc="Simulating Monomers", dt = 7200.0)
+    p = Progress(num_monomers, desc="Simulating Monomers", dt = config.prog)
 
     try
         while length(state.x_coords) < num_monomers

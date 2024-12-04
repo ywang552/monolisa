@@ -74,21 +74,20 @@ function generate_plots(state::AbstractState, config, output_prefix=nothing)
     overlay = config.grid_overlay
 
     # File information
-    file_name = basename(config.file_path)[1:end-4]
+    file_name = basename(config.file_path)
     num_monomers = length(x_coords)
-
     # Generate plots
     fast_plot_monomers(
-        x_coords, y_coords, box_size, overlay, "Monomers", 
-        save_path="$(output_prefix)_$(num_monomers)monomers_placement.png"
+        x_coords, y_coords, box_size, overlay, file_name, 
+        save_path="$(output_prefix)_$(num_monomers)_$(file_name)_monomers_placement.png"
     )
     plot_heatmap(
         W, "in_$(file_name)_$(num_monomers)", 
-        save_path="$(output_prefix)_$(num_monomers)monomers_in.png"
+        save_path="$(output_prefix)_$(num_monomers)_$(file_name)_monomers_in.png"
     )
     plot_heatmap(
         K, "out_$(file_name)_$(num_monomers)", 
-        save_path="$(output_prefix)_$(num_monomers)monomers_out.png"
+        save_path="$(output_prefix)_$(num_monomers)_$(file_name)_monomers_out.png"
     )
 
     println("All plots saved with prefix: $output_prefix")

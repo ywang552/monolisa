@@ -21,10 +21,11 @@ mutable struct Config
     max_monomers::Int          # Maximum number of monomers
     file_path::String          # Path to the input file
     grid_overlay::Bool
+    prog::Float64              # Progress report interval 
     # Constructor to allow keyword arguments
     function Config(; ft=0.0005, box_size=10, nn_restriction=3, box_capacity=16,
-                     monomer_radius=1.0, grid_size=6000, max_monomers=100, file_path="8Cpop_grids.txt", grid_overlay = false)
-        new(ft, box_size, nn_restriction, box_capacity, monomer_radius, grid_size, max_monomers, file_path, grid_overlay)
+                     monomer_radius=1.0, grid_size=6000, max_monomers=100, file_path="8Cpop_grids.txt", grid_overlay = false, prog = 5)
+        new(ft, box_size, nn_restriction, box_capacity, monomer_radius, grid_size, max_monomers, file_path, grid_overlay, prog)
     end
 end
 
@@ -141,7 +142,6 @@ Outputs:
     - A normalized W matrix with dimensions 360x360.
 """
 function load_w_matrix(file_path)
-    println(file_path)
     # Read W matrix as a vector
     file = open(file_path, "r")
     raw_data = Float64[]  # Store all the values in a flat array
