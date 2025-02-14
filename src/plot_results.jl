@@ -4,7 +4,11 @@ using Statistics
 """
 Fast plotting of monomer positions with coordinate transformations.
 """
-function fast_plot_monomers(x_coords, y_coords, boxSize, plot_grid, cl; marker_size=0.05, save_path=nothing)
+function fast_plot_monomers(
+    x_coords, y_coords, boxSize, plot_grid, cl;
+    marker_size=0.05, save_path=nothing, hide_title=true, hide_labels=true, hide_axes=true
+)
+    # Offset and scaling
     x_offset = minimum(x_coords)
     y_offset = minimum(y_coords)
     x_coords .= x_coords .- x_offset
@@ -12,30 +16,43 @@ function fast_plot_monomers(x_coords, y_coords, boxSize, plot_grid, cl; marker_s
     x_coords .= x_coords .* 0.37
     y_coords .= y_coords .* 0.37
 
+    # Plot monomers
     scatter(
         x_coords, y_coords,
         color=:green, marker=:circle, ms=marker_size,
-        fillcolor=:green, linecolor=:green, aspect_ratio=1, legend=false, grid=false,
-        title="Monomer Placement: $cl ($(length(x_coords)) Monomers)",
-        xlabel="x (nanometers)", ylabel="y (nanometers)", dpi=600
+        fillcolor=:green, linecolor=:green, aspect_ratio=1, legend=false, grid=false, dpi=600
     )
-    if(plot_grid)
+
+    # Handle optional title and labels
+    if !hide_title
+        plot!(title="Monomer Placement: $cl ($(length(x_coords)) Monomers)")
+    end
+    if !hide_labels
+        plot!(xlabel="x (nanometers)", ylabel="y (nanometers)")
+    end
+    if hide_axes
+        plot!(xticks=nothing, yticks=nothing, framestyle=:none)
+    end
+
+    # Optionally plot the grid
+    if plot_grid
         x_max = maximum(x_coords)
         y_max = maximum(y_coords)
-        for x in 0:boxSize*.37:x_max
-            plot!([x, x], [0, y_max], lw=0.5, )  # Vertical lines
+        for x in 0:boxSize*0.37:x_max
+            plot!([x, x], [0, y_max], lw=0.5)  # Vertical lines
         end
-        for y in 0:boxSize*.37:y_max
-            plot!([0, x_max], [y, y], lw=0.5, )  # Horizontal lines
+        for y in 0:boxSize*0.37:y_max
+            plot!([0, x_max], [y, y], lw=0.5)  # Horizontal lines
         end
-    end 
+    end
 
-
+    # Save the plot if a save path is provided
     if save_path !== nothing
         savefig(save_path)
         println("Plot saved to: $save_path")
     end
 end
+
 
 """
 Plots a heatmap for a given matrix.

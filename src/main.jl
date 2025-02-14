@@ -40,9 +40,9 @@ config = Config(
     monomer_radius=1,
     grid_size=8000,
     # max_monomers=1000000,
-    max_monomers=10000,
+    max_monomers=20000,
     # file_path=ARGS[1],
-    file_path="Claudins/c18pop_grids.txt",
+    file_path="Claudins/Cpop_grids 2.txt",
     grid_overlay = false,
     prog = 1
 )
@@ -50,12 +50,12 @@ config = Config(
 function main()
     println("starting the placement...")
     # Pass configuration to simulation
-    # state = run(config)
+    state = run(config)
 
     # Save results or generate plots
     return state
 end
 
-#state = main()
+state = main()
 
-# generate_plots(state, config, pwd()*"\\plots\\tmp\\"*basename(config.file_path)[1:end-4])
+generate_plots(state, config, pwd()*"\\plots\\tmp\\"*basename(config.file_path)[1:end-4]*"_123")
