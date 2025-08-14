@@ -38,9 +38,9 @@ config = Config(
     nn_restriction=3,
     box_capacity=16,
     monomer_radius=1,
-    grid_size=8000,
+    grid_size=80,
     # max_monomers=1000000,
-    max_monomers=20000,
+    max_monomers=1000,
     # file_path=ARGS[1],
     file_path="Claudins/Cpop_grids 2.txt",
     grid_overlay = false,
@@ -57,5 +57,25 @@ function main()
 end
 
 state = main()
+print(length(state.x_coords))
+out_dir = joinpath(pwd(), "plots", "tmp")
+mkpath(out_dir)
 
-generate_plots(state, config, pwd()*"\\plots\\tmp\\"*basename(config.file_path)[1:end-4]*"_123")
+name_noext, _ = splitext(basename(config.file_path))
+prefix = joinpath(out_dir, name_noext*"_123")
+
+generate_plots(state, config; output_prefix=prefix)
+
+state.rotation
+
+x = state.x_coords
+y = state.y_coords
+
+
+for i in 1:10
+    for j in i+1:10
+        if is_collision(x[i],y[1],x[j],y[j],1)
+            println("!")
+        end 
+    end
+end 

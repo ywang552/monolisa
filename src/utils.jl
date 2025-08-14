@@ -30,7 +30,7 @@ Returns:
 # ============================
 function is_collision(x1, y1, x2, y2, radius)
     distance_squared = (x1 - x2)^2 + (y1 - y2)^2
-    return distance_squared < (2 * radius)^2  # Compare squared distance with squared diameter
+    return distance_squared <= (2 * radius)^2  # Compare squared distance with squared diameter
 end
 
 """

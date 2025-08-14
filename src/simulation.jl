@@ -60,22 +60,28 @@ function add_monomer(state::SimulationState, config::Config, boxIndx::Int)
     collision_detected = false
     new_NN_updates = Dict()
 
-    for i1 in max(1, xtmp - 1):xtmp + 1
-        for i2 in max(1, ytmp - 1):ytmp + 1
-            for i in 1:boxNum[i1, i2]
-                idx1 = boxList[i1, i2][i]
+    # for i1 in max(1, xtmp - 1):xtmp + 1
+    #     for i2 in max(1, ytmp - 1):ytmp + 1
+    #         for i in 1:boxNum[i1, i2]
+    #             idx1 = boxList[i1, i2][i]
 
-                if is_neighbor(new_x, new_y, x_coords[idx1], y_coords[idx1], radius)
-                    if is_collision(new_x, new_y, x_coords[idx1], y_coords[idx1], radius) || NN[idx1] + 1 > NNrestriction
-                        collision_detected = true
-                    else
-                        new_NN_updates[idx1] = get(new_NN_updates, idx1, NN[idx1]) + 1
-                        sc += 1
-                    end
-                end
-            end
-        end
-    end
+    #             if is_neighbor(new_x, new_y, x_coords[idx1], y_coords[idx1], radius)
+    #                 if is_collision(new_x, new_y, x_coords[idx1], y_coords[idx1], radius) || NN[idx1] + 1 > NNrestriction
+    #                     collision_detected = true
+    #                 else
+    #                     new_NN_updates[idx1] = get(new_NN_updates, idx1, NN[idx1]) + 1
+    #                     sc += 1
+    #                 end
+    #             end
+    #         end
+    #     end
+    # end
+
+    for i in eachindex(x_coords)
+        if is_collision(new_x, new_y, x_coords[i], y_coords[i], radius)
+            collision_detected = true
+        end 
+    end 
 
     if collision_detected
         return false, -4
@@ -336,12 +342,12 @@ function run(fn; log_path=pwd()*"/"*"logs/", save_path=pwd()*"/"*"saved_states/m
                 end
             end
     
-            if x && (cc + 1) % 5000 == 0
+            if x && (cc + 1) % 50 == 0
                 println(size(state.x_coords, 1))
                 println(state.error_dic)
             end
     
-            if cc > 1000000
+            if cc > 100
                 println("broke: too many collisions/empty row")
                 break
             end
@@ -363,7 +369,7 @@ function run(fn; log_path=pwd()*"/"*"logs/", save_path=pwd()*"/"*"saved_states/m
         println("Minimal state saved after error.")
         rethrow(e)  # Re-throw the error after saving
     finally
-        threshold = 10  # Example: Minimum 3 monomers per grid region
+        threshold = 5  # Example: Minimum 3 monomers per grid region
         state = remove_small_islands!(state, threshold)
         placed_monomer_number = length(state.x_coords)
         pn = "$(placed_monomer_number)_$(basename(config.file_path)[1:end-4])"
