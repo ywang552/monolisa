@@ -40,9 +40,9 @@ config = Config(
     monomer_radius=1,
     grid_size=80,
     # max_monomers=1000000,
-    max_monomers=100,
+    max_monomers=1000,
     # file_path=ARGS[1],
-    file_path="Claudins/Cpop_grids 2.txt",
+    file_path="Claudins/c2_WT.txt",
     grid_overlay = false,
     prog = 1
 )

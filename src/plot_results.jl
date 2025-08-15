@@ -288,6 +288,14 @@ function plot_monomers_lod(
                                           arc_span_deg=25.0,      # length along rim
                                           thickness_frac=0.45,    # thickness toward center
                                           color=:black, alpha=0.95)
+
+                                # --- Additional 90° ticks in yellow ---
+                    add_orientation_arcs!(plt, xT, yT, rotation .+ 90.0, r_plot_unit;
+                                        indices=vis_ids,
+                                        every=oe,
+                                        arc_span_deg=25.0,
+                                        thickness_frac=0.45,
+                                        color=:yellow, alpha=0.95)
                 else
                     # fallback arrows if no radius available
                     oidx = vis_ids[1:oe:length(vis_ids)]
