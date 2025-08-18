@@ -124,20 +124,91 @@ end
 Overlay rim-segment spin markers on visible points.
 - indices: absolute indices that were actually scattered (e.g. collect(idx))
 """
-function add_orientation_arcs!(
-    plt, xT, yT, rotation_deg, r_plot;
-    indices::AbstractVector{Int}, every::Int=50,
-    arc_span_deg::Real=20.0, thickness_frac::Real=0.45,
-    color=:green, alpha=0.95
-)
-    for j in 1:every:length(indices)
-        i = indices[j]
-        θ = rotation_deg[i]
-        shp = ring_sector_shape(xT[i], yT[i], r_plot, thickness_frac, θ;
-                                span=arc_span_deg, ns=12)
-        plot!(plt, shp, c=color, opacity=alpha, linecolor=:transparent)
+function add_orientation_arcs!(plt, x, y, rotation, r;
+                               indices, every=1,
+                               arc_span_deg=25.0,
+                               thickness_frac=0.45,
+                               color=:blue, alpha=0.95)
+
+    # stroke width in data units (fraction of radius)
+    lw = 8  # data-units linewidth
+
+    nseg = 24  # resolution for smooth arc
+    for k in 1:every:length(indices)
+        i = indices[k]
+        θ0 = (rotation[i] - arc_span_deg/2) * π/180
+        θ1 = (rotation[i] + arc_span_deg/2) * π/180
+        θs = range(θ0, θ1; length=nseg)
+        xs = x[i] .+ r .* cos.(θs)
+        ys = y[i] .+ r .* sin.(θs)
+
+        plot!(plt, xs, ys;
+              seriestype=:path,
+              color=color, alpha=alpha,
+              linewidth=lw,                     # stroke thickness
+              linecap=:round)                   # prettier ends
     end
 end
+
+
+"""
+Choose the least-occupied corner for an inset compass.
+
+Returns: (:topleft | :topright | :bottomleft | :bottomright, cx, cy, r)
+- cx, cy = center of the compass
+- r      = compass radius (in plot units)
+"""
+function _choose_compass_corner(xT::AbstractVector, yT::AbstractVector,
+                                xlim::Tuple, ylim::Tuple;
+                                size_frac::Real=0.12,    # compass radius relative to min span
+                                margin_frac::Real=0.05,  # gap to axes
+                                sample_cap::Int=100_000)
+
+    N = length(xT)
+    # sample for speed if huge
+    if N > sample_cap
+        stride = cld(N, sample_cap)
+        xS = @view xT[1:stride:end]; yS = @view yT[1:stride:end]
+    else
+        xS = xT; yS = yT
+    end
+
+    xlo, xhi = xlim; ylo, yhi = ylim
+    spanx = xhi - xlo; spany = yhi - ylo
+    spanu = min(spanx, spany)
+
+    r = size_frac * spanu
+    m = margin_frac * spanu
+    box = 2r   # square that bounds the compass
+
+    corners = Dict(
+        :topleft     => (xlo + m,         yhi - m - box),
+        :topright    => (xhi - m - box,   yhi - m - box),
+        :bottomleft  => (xlo + m,         ylo + m),
+        :bottomright => (xhi - m - box,   ylo + m),
+    )
+
+    # Count points inside each corner box quickly
+    counts = Dict{Symbol,Int}()
+    for (k, (xb, yb)) in corners
+        xc1, xc2 = xb, xb + box
+        yc1, yc2 = yb, yb + box
+        # boolean mask count (vectorized & fast)
+        c = count(((xS .>= xc1) .& (xS .<= xc2) .& (yS .>= yc1) .& (yS .<= yc2)))
+        counts[k] = c
+    end
+
+    # take the corner with the fewest points; in a tie prefer top-right
+    order = sort(collect(keys(counts)); by=k->(counts[k], k==:topright ? 0 : 1))
+    best = first(order)
+    xb, yb = corners[best]
+
+    # center of the compass circle for plotting
+    cx, cy = xb + r, yb + r
+    return best, cx, cy, r
+end
+
+
 
 # -------------------------
 # Main LOD plotter
@@ -266,15 +337,44 @@ function plot_monomers_lod(
             stride = ceil(Int, N / sample_cap_points)
             idx = 1:stride:length(xT)
         end
+
         plt = scatter(xT[idx], yT[idx];
             marker=:circle, ms=ms_final,
-            markercolor=:green,           # fill
-            markerstrokecolor=:green,       # contour
-            markerstrokewidth=0.8,
+            markercolor=:white,       # fully transparent fill
+            markerstrokecolor=:black,        # outline color
+            markerstrokewidth=2.0,           # thicker outline
             linecolor=:transparent,
             aspect_ratio=:equal, legend=false, grid=false,
             dpi=dpi, size=figsize,
             xlim=xlim, ylim=ylim, xticks=xticks, yticks=yticks)
+
+                # --- Compass Legend (auto-corner) ---
+        begin
+            best, cx, cy, r = _choose_compass_corner(xT, yT, xlim, ylim;
+                                                    size_frac=0.12, margin_frac=0.05,
+                                                    sample_cap=sample_cap_points)
+
+            θ = range(0, 2π; length=200)
+            plot!(plt, cx .+ r .* cos.(θ), cy .+ r .* sin.(θ);
+                seriestype=:path, color=:black, linewidth=1.5,
+                fillcolor=RGBA(0,0,0,0))
+
+            dirs = [
+                (0.0,        :blue,   "0/360"),
+                (π/2,        :red,    "90"),
+                (π,          :yellow, "180"),
+                (3π/2,       :green,  "270"),
+            ]
+
+            for (ang, col, lab) in dirs
+                x1, y1 = cx + 0.65*r*cos(ang), cy + 0.65*r*sin(ang)
+                x2, y2 = cx + 1.00*r*cos(ang), cy + 1.00*r*sin(ang)
+                plot!(plt, [x1, x2], [y1, y2]; color=col, linewidth=2.0, linecap=:round)
+
+                xt, yt = cx + 1.22*r*cos(ang), cy + 1.22*r*sin(ang)
+                annotate!(plt, xt, yt, text(lab, 9, col, :center))
+            end
+        end
 
         # Spin ticks (rim segments) if we have rotation + radius
         if show_orientation && rotation !== nothing && !isempty(rotation)
@@ -287,7 +387,7 @@ function plot_monomers_lod(
                                           every=oe,
                                           arc_span_deg=25.0,      # length along rim
                                           thickness_frac=0.45,    # thickness toward center
-                                          color=:black, alpha=0.95)
+                                          color=:blue, alpha=0.95)
 
                                 # --- Additional 90° ticks in yellow ---
                     add_orientation_arcs!(plt, xT, yT, rotation .+ 90.0, r_plot_unit;
@@ -295,7 +395,21 @@ function plot_monomers_lod(
                                         every=oe,
                                         arc_span_deg=25.0,
                                         thickness_frac=0.45,
+                                        color=:red, alpha=0.95)
+
+                    add_orientation_arcs!(plt, xT, yT, rotation .+ 180.0, r_plot_unit;
+                                        indices=vis_ids,
+                                        every=oe,
+                                        arc_span_deg=25.0,
+                                        thickness_frac=0.45,
                                         color=:yellow, alpha=0.95)
+
+                    add_orientation_arcs!(plt, xT, yT, rotation .+ 270.0, r_plot_unit;
+                                        indices=vis_ids,
+                                        every=oe,
+                                        arc_span_deg=25.0,
+                                        thickness_frac=0.45,
+                                        color=:green, alpha=0.95)
                 else
                     # fallback arrows if no radius available
                     oidx = vis_ids[1:oe:length(vis_ids)]
@@ -326,10 +440,15 @@ function plot_monomers_lod(
     xlabel!(plt, "Distance ($(unit_label(u)))")
     ylabel!(plt, "Distance ($(unit_label(u)))")
 
+
+
+
     if save_path !== nothing
         savefig(plt, save_path)
         println("Plot saved to: $save_path")
     end
+
+
     return plt
 end
 
