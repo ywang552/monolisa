@@ -50,10 +50,24 @@ function add_monomer(state::SimulationState, config::Config, boxIndx::Int)
     new_x = (xtmp - 1) * boxSize + (new_x % boxSize)
     new_y = (ytmp - 1) * boxSize + (new_y % boxSize)
 
-    # Update probabilities and angles
-    angle = relative_angle[idx]
-    w = reshape(sum(W[angle, :], dims=1), 72)
-    ridx = sample(1:length(w), Weights(w))
+    # Build column weights by multiplying rows
+    angles_for_pos = relative_angle[idx] isa AbstractVector ? relative_angle[idx] : [relative_angle[idx]]
+
+    col_weights = ones(Float64, size(W, 2))
+    for a in angles_for_pos
+        col_weights .*= @view W[a, :]
+    end
+
+    if all(iszero, col_weights)
+        return false, -4   # invalid position: no joint probability
+    end
+
+    col_weights .= max.(col_weights, eps())
+    ridx = sample(1:length(col_weights), Weights(col_weights))
+
+    
+
+
 
     # Check for collisions and update neighbors
     sc = 0
@@ -105,7 +119,9 @@ function add_monomer(state::SimulationState, config::Config, boxIndx::Int)
     dx, dy = new_x - old_x, new_y - old_y
     tt = round(atan(-dy, -dx) * 180 / pi)
     push!(rotation, (tt - ridx * 5 + 720) % 360)
-    K[angle, ridx] .+= 1
+    for a in angles_for_pos
+        K[a, ridx] += 1
+    end
 
     return true, boxIndx, [new_x, new_y]
 end
@@ -196,62 +212,111 @@ function available_space(x_coords, y_coords, radius, W, rotation, NN, LAST_TO_CH
     unique_x, unique_y, updated_probabilities, unique_angles, unique_targets
 end
 
-# ============================
-# Function: update_probabilities_fast(W,
-# Description: [Add a short description of what this function does.]
-# Inputs: [List inputs here.]
-# Outputs: [List outputs here.]
-# ============================
-function update_probabilities_fast(W, available_x, available_y, available_p, relative_angle, target)
-    overlapping_indices = Dict{Tuple{Float64, Float64}, Vector{Int}}()
+"""
+Group overlapping candidate positions and combine their probabilities.
 
-    for i in 1:length(available_x)
-        position = (available_x[i], available_y[i])
+- Overlap is decided by quantizing (x,y) to a grid set by `atol`.
+- For a bucket with multiple candidates, we COMBINE by PRODUCT:
+    p_pos = ∏_k p_k,  where  p_k = sum(W[row_k, :]).
+- Supports the case where `relative_angle[i]` is a single Int or a Vector{Int}.
+- Ensures strictly-positive outputs for Weights() by clamping with eps().
 
-        found_overlap = false
-        for (key, indices) in overlapping_indices
-            if isapprox(key[1], position[1], atol=0.05) && isapprox(key[2], position[2], atol=0.05)
-                push!(indices, i)
-                found_overlap = true
-                break
-            end
+Returns:
+    unique_x::Vector{Float64},
+    unique_y::Vector{Float64},
+    updated_probabilities::Vector{Float64},
+    unique_angles::Vector{Vector{Int}},    # all rows (5° bins) that support each (x,y)
+    unique_targets::Vector{Int}            # representative parent index for each (x,y)
+"""
+function update_probabilities_fast(
+    W::AbstractMatrix,
+    available_x::AbstractVector,
+    available_y::AbstractVector,
+    available_p::AbstractVector,
+    relative_angle,     # Vector{Int} or Vector{Vector{Int}}
+    target::AbstractVector;
+    atol::Float64 = 0.05,    # positional merge tolerance (world units)
+    rule::Symbol = :product  # :product (default) or :sum as fallback
+)
+    @assert length(available_x) == length(available_y) == length(available_p) ==
+            length(relative_angle) == length(target)
 
-        end
+    # Quantize (x,y) to merge near-identical positions (fast hash key)
+    inv_step = 1 / atol
+    key(x, y) = (round(x * inv_step) / inv_step, round(y * inv_step) / inv_step)
 
-        if !found_overlap
-            overlapping_indices[position] = [i]
-        end
+    # Bucket indices by position key
+    groups = Dict{Tuple{Float64,Float64}, Vector{Int}}()
+    for i in eachindex(available_x)
+        k = key(available_x[i], available_y[i])
+        push!(get!(groups, k, Int[]), i)
     end
 
-    num_unique = length(overlapping_indices)
-    unique_x = Vector{Float64}(undef, num_unique)
-    unique_y = Vector{Float64}(undef, num_unique)
-    unique_angles = Vector{Vector{Int}}(undef, num_unique)
-    unique_targets = Vector{Int}(undef, num_unique)
-    updated_probabilities = Vector{Float64}(undef, num_unique)
+    n = length(groups)
+    unique_x              = Vector{Float64}(undef, n)
+    unique_y              = Vector{Float64}(undef, n)
+    unique_angles         = Vector{Vector{Int}}(undef, n)
+    unique_targets        = Vector{Int}(undef, n)
+    updated_probabilities = Vector{Float64}(undef, n)
 
-    index = 1
-    for (position, indices) in overlapping_indices
-        unique_x[index] = position[1]
-        unique_y[index] = position[2]
-
-        if length(indices) > 1
-            new_prob = calculate_probabilities(W, indices, relative_angle)
-            combined_angles = relative_angle[indices]  # Combine the angles for this group
-            unique_angles[index] = combined_angles
-            updated_probabilities[index] = new_prob
-        else
-            idx = indices[1]
-            unique_angles[index] = [relative_angle[idx]]
-            updated_probabilities[index] = available_p[idx]
+    # Helper: combine probabilities in a bucket according to `rule`
+    # p_k is based on row sums of W for that candidate's angle row(s).
+    function calc_prob!(idxs::Vector{Int})::Float64
+        if rule === :sum && length(idxs) > 1
+            # legacy/fallback behavior
+            return max(sum(@view available_p[idxs]), eps())
         end
+        # PRODUCT of per-edge masses. A candidate may carry one row or many (Vector{Int})
+        # For a candidate with multiple rows, we multiply their row-sums first.
+        acc = 1.0
+        for j in idxs
+            rows_j = relative_angle[j]
+            if rows_j isa AbstractVector
+                pj = 1.0
+                @inbounds for r in rows_j
+                    pj *= max(sum(@view W[r, :]), eps())
+                end
+                acc *= pj
+            else
+                r = rows_j::Int
+                acc *= max(sum(@view W[r, :]), eps())
+            end
+        end
+        return max(acc, eps())
+    end
 
-        unique_targets[index] = target[indices[1]]
-        index += 1
+    i = 1
+    for (pos, idxs) in groups
+        unique_x[i] = pos[1]
+        unique_y[i] = pos[2]
+
+        # collect/union all supporting angle rows for this position
+        rows = Int[]
+        for j in idxs
+            rj = relative_angle[j]
+            if rj isa AbstractVector
+                append!(rows, rj)
+            else
+                push!(rows, rj)
+            end
+        end
+        unique_angles[i] = unique!(rows)
+
+        # pick a representative parent for bookkeeping (first is fine)
+        unique_targets[i] = target[idxs[1]]
+
+        # probability combine
+        if length(idxs) == 1
+            updated_probabilities[i] = max(available_p[idxs[1]], eps())
+        else
+            updated_probabilities[i] = calc_prob!(idxs)
+        end
+        i += 1
     end
 
     return unique_x, unique_y, updated_probabilities, unique_angles, unique_targets
 end
+
 
 # ============================
 # Function: identify_available_angles(x_coords,
@@ -358,7 +423,7 @@ function run(fn; log_path=pwd()*"/"*"logs/", save_path=pwd()*"/"*"saved_states/m
         end
     catch e
         threshold = 10  # Example: Minimum 3 monomers per grid region
-        state = remove_small_islands!(state, threshold)
+        # state = remove_small_islands!(state, threshold)
         placed_monomer_number = length(state.x_coords)
         pn = "$(placed_monomer_number)_$(basename(config.file_path)[1:end-4])"
         # Save the current state as MinimalState on error
@@ -370,7 +435,7 @@ function run(fn; log_path=pwd()*"/"*"logs/", save_path=pwd()*"/"*"saved_states/m
         rethrow(e)  # Re-throw the error after saving
     finally
         threshold = 5  # Example: Minimum 3 monomers per grid region
-        state = remove_small_islands!(state, threshold)
+        # state = remove_small_islands!(state, threshold)
         placed_monomer_number = length(state.x_coords)
         pn = "$(placed_monomer_number)_$(basename(config.file_path)[1:end-4])"
         # Save final results as MinimalState

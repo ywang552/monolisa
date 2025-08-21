@@ -18,6 +18,63 @@ ceil_to(x, step) = step * ceil(Int, x / step)
 build_ticks(limit, step) = collect(0:step:limit)
 const DEG2RAD = π/180
 
+
+
+"""
+Draw contact lines between disks of radius r at positions (x,y).
+Uses a spatial grid so we only check local neighbors.
+- Only draws if r is provided (not `nothing`)
+- contact_scale lets you be a bit lenient (e.g., 1.02).
+"""
+function _draw_contacts_grid!(plt, x::AbstractVector, y::AbstractVector, r::Real;
+                              xlim::Tuple, ylim::Tuple,
+                              contact_scale::Real=1.02,
+                              max_lines::Int=200_000)
+
+    N = length(x)
+    contact_r = 2*r*contact_scale          # <- ensure the * is here (not `2r`)
+    cell = contact_r
+
+    # grid bucketing
+    gx(i) = Int(floor((x[i] - first(xlim)) / cell))
+    gy(i) = Int(floor((y[i] - first(ylim)) / cell))
+    buckets = Dict{Tuple{Int,Int}, Vector{Int}}()
+    for i in 1:N
+        key = (gx(i), gy(i))
+        push!(get!(buckets, key, Int[]), i)
+    end
+
+    offs = ((-1,-1),(-1,0),(-1,1),(0,-1),(0,0),(0,1),(1,-1),(1,0),(1,1))
+    drawn = 0
+    csq = contact_r^2
+
+    for i in 1:N
+        xi = x[i]; yi = y[i]
+        isfinite(xi) && isfinite(yi) || continue
+        gi, gj = gx(i), gy(i)
+
+        for (di, dj) in offs
+            nbrs = get(buckets, (gi+di, gj+dj), nothing)
+            isnothing(nbrs) && continue
+            for j in nbrs
+                j <= i && continue
+                xj = x[j]; yj = y[j]
+                isfinite(xj) && isfinite(yj) || continue
+
+                dx = xj - xi; dy = yj - yi
+                if dx*dx + dy*dy <= csq
+                    # use 2-point VECTORS, not scalars/tuples
+                    plot!(plt, [xi, xj], [yi, yj];
+                          seriestype=:path, color=:gray, alpha=0.5, linewidth=0.7)
+                    drawn += 1
+                    drawn >= max_lines && return
+                end
+            end
+        end
+    end
+end
+
+
 # -------------------------
 # Transform (shift + optional fit-scale)
 # -------------------------
@@ -129,9 +186,10 @@ function add_orientation_arcs!(plt, x, y, rotation, r;
                                arc_span_deg=25.0,
                                thickness_frac=0.45,
                                color=:blue, alpha=0.95)
+    invlog10(x) = 1 - log10(x) / 6   # since log10(1_000_000) = 6
 
     # stroke width in data units (fraction of radius)
-    lw = 8  # data-units linewidth
+    lw = 5 * invlog10(length(x))  # data-units linewidth
 
     nseg = 24  # resolution for smooth arc
     for k in 1:every:length(indices)
@@ -234,6 +292,9 @@ function plot_monomers_lod(
     lod::Symbol=:auto, sample_cap_points::Int=100_000,
     bins::Tuple{Int,Int}=(600,600),
     orient_every::Union{Int,Symbol}=:auto,
+    draw_contacts::Union{Bool,Symbol}=:auto,  # NEW: draw lines between touching monomers
+    contact_scale::Real=1.02,             # NEW: tolerance multiplier on 2r
+    contact_max_lines::Int=200_000,       # NEW: cap so plots don't get too heavy
     orient_len::Union{Real,Symbol}=:auto,   # (kept for fallback arrows)
     marker_size::Union{Real,Symbol}=:auto,
     figsize::Tuple{Int,Int}=(1200,1200),
@@ -260,7 +321,7 @@ function plot_monomers_lod(
     spanx_nm = maximum(x_nm) - minimum(x_nm)
     spany_nm = maximum(y_nm) - minimum(y_nm)
     span_nm  = max(spanx_nm, spany_nm)
-
+    
     u   = unit === :auto ? pick_unit(span_nm) : Symbol(unit)
     div = unit_divisor(u)  # nm → chosen unit
 
@@ -273,26 +334,46 @@ function plot_monomers_lod(
         lod = N ≤ 100 ? :detail : (N ≤ 10_000 ? :medium : :massive)
     end
 
-    # 4) Axis limits + ticks in chosen unit
+    # --- AFTER: xT, yT, r_plot_unit are computed ---
+
+    # 4) Axis limits + ticks in chosen unit (with padding so circles aren't clipped)
     spanx = maximum(xT) - minimum(xT)
     spany = maximum(yT) - minimum(yT)
 
+    # pad: one outer radius (plus a small safety for stroke/arc), or 2% of span if radius unknown
+    pad = r_plot_unit !== nothing ? 1.15 * r_plot_unit : 0.02 * max(spanx, spany)
+
+    # default limits if not provided
     if xlim === nothing || ylim === nothing
-        xlim === nothing && (xlim = (minimum(xT), maximum(xT)))
-        ylim === nothing && (ylim = (minimum(yT), maximum(yT)))
+        xlo = minimum(xT) - pad
+        xhi = maximum(xT) + pad
+        ylo = minimum(yT) - pad
+        yhi = maximum(yT) + pad
+        xlim = (xlo, xhi)
+        ylim = (ylo, yhi)
+    else
+        # respect user limits but still ensure padding
+        xlim = (first(xlim) - pad, last(xlim) + pad)
+        ylim = (first(ylim) - pad, last(ylim) + pad)
     end
-    xticks = yticks = nothing
+
+        # Use different variable names to avoid colliding with Plots.xticks function
+    xtick_vals = nothing
+    ytick_vals = nothing
+
     if tick_step === :auto
         step = nice_tick_step(max(last(xlim)-first(xlim), last(ylim)-first(ylim)))
         x0 = first(xlim) - mod(first(xlim), step)
         y0 = first(ylim) - mod(first(ylim), step)
-        xticks = collect(x0:step:last(xlim))
-        yticks = collect(y0:step:last(ylim))
+        xtick_vals = collect(x0:step:last(xlim))
+        ytick_vals = collect(y0:step:last(ylim))
     elseif tick_step !== nothing
         step = Float64(tick_step)
-        xticks = collect(first(xlim):step:last(xlim))
-        yticks = collect(first(ylim):step:last(ylim))
+        xtick_vals = collect(first(xlim):step:last(xlim))
+        ytick_vals = collect(first(ylim):step:last(ylim))
     end
+
+
 
     # 5) Auto marker size from physical radius if available
     ms_from_radius = nothing
@@ -328,9 +409,10 @@ function plot_monomers_lod(
             clamp.(yT, first(ylim), last(ylim)); bins=bins
         )
         plt = heatmap(xedges, yedges, counts;
-                      aspect_ratio=:equal, legend=false, dpi=dpi, size=figsize,
-                      xlim=xlim, ylim=ylim, xticks=xticks, yticks=yticks,
-                      color=cgrad([:blue, :red]))
+            aspect_ratio=:equal, legend=false, dpi=dpi, size=figsize,
+            xlim=xlim, ylim=ylim, xticks=xtick_vals, yticks=ytick_vals,
+            color=cgrad([:blue, :red]))
+
     else
         idx = 1:length(xT)
         if lod == :medium && N > sample_cap_points
@@ -340,13 +422,19 @@ function plot_monomers_lod(
 
         plt = scatter(xT[idx], yT[idx];
             marker=:circle, ms=ms_final,
-            markercolor=:white,       # fully transparent fill
-            markerstrokecolor=:black,        # outline color
-            markerstrokewidth=2.0,           # thicker outline
-            linecolor=:transparent,
-            aspect_ratio=:equal, legend=false, grid=false,
+            markercolor=:white, markerstrokecolor=:black, markerstrokewidth=2.0,
+            linecolor=:transparent, aspect_ratio=:equal, legend=false, grid=false,
             dpi=dpi, size=figsize,
-            xlim=xlim, ylim=ylim, xticks=xticks, yticks=yticks)
+            xlim=xlim, ylim=ylim, xticks=xtick_vals, yticks=ytick_vals)
+
+        draw_contacts_bool = true 
+                # --- Contact lines (if radius is known) ---
+        if draw_contacts_bool && r_plot_unit !== nothing
+            _draw_contacts_grid!(plt, xT[idx], yT[idx], r_plot_unit;
+                                xlim=xlim, ylim=ylim,
+                                contact_scale=contact_scale,
+                                max_lines=contact_max_lines)
+        end
 
                 # --- Compass Legend (auto-corner) ---
         begin
@@ -441,15 +529,71 @@ function plot_monomers_lod(
     ylabel!(plt, "Distance ($(unit_label(u)))")
 
 
-
-
     if save_path !== nothing
         savefig(plt, save_path)
         println("Plot saved to: $save_path")
     end
 
 
+    plot_W_vs_K(state.W, state.K; normalize_W=true, save_path=save_path*"W_vs_K.png")
+
     return plt
+end
+
+
+using Plots
+
+"""
+Plot W (probabilities) and K (counts) with different color mappings.
+- W: clamped/normalized to [0,1], perceptual palette (:viridis).
+- K: log10(count+1) to compress heavy tails, contrasty palette (:magma).
+- Angle ticks at 0°, 90°, 180°, 270° assuming 72×72 (5° bins).
+"""
+function plot_W_vs_K(W::AbstractMatrix, K::AbstractMatrix;
+                     normalize_W::Bool=true,
+                     add_angle_ticks::Bool=true,
+                     save_path::Union{Nothing,String}=nothing)
+
+    @assert size(W) == size(K) "W and K must have same shape (e.g., 72×72)."
+    ZED = cgrad(:roma, 10, categorical = true, scale = :exp)
+
+    # --- W: probability map ---
+    Wp = normalize_W ? clamp.(W, 0, 1) : W
+    clW = normalize_W ? (0.0, 1.0) : (minimum(Wp), maximum(Wp))
+    pltW = heatmap(Wp;
+        aspect_ratio = :equal,
+        color        = ZED,  # good for probabilities
+        clims        = clW,
+        colorbar_title = normalize_W ? "prob (0–1)" : "prob",
+        title       = "Input connection probability (W)")
+
+    # --- K: count map with log compression ---
+    Klog = log10.(K .+ 1)  # log10 for readable dynamic range
+    kmin, kmax = extrema(Klog)
+    kmax == kmin && (kmax += 1e-6)  # avoid degenerate color scale
+    pltK = heatmap(Klog;
+        aspect_ratio   = :equal,
+        color          = ZED, # distinct from W
+        clims          = (kmin, kmax),
+        colorbar_title = "log10(count + 1)",
+        title          = "Simulated connections (K)")
+
+    # --- Degree ticks (0°,90°,180°,270°) for 72 bins (5° each) ---
+    if add_angle_ticks && size(W,1) == 72 && size(W,2) == 72
+        ticks = 1:18:72
+        labs  = ["0°","90°","180°","270°"]
+        for p in (pltW, pltK)
+            xticks!(p, (ticks, labs))
+            yticks!(p, (ticks, labs))
+        end
+    end
+
+    fig = plot(pltW, pltK; layout=(1,2), size=(1200,520), dpi=200)
+    if save_path !== nothing
+        savefig(fig, save_path)
+        println("Saved → $save_path")
+    end
+    return fig
 end
 
 # -------------------------
@@ -457,7 +601,7 @@ end
 # -------------------------
 using Base.Filesystem: basename
 
-function generate_plots(state::AbstractState, config; output_prefix="results/monolisa")
+function generate_plots(state::AbstractState, config; output_prefix="plots/tmp/")
     x = state.x_coords
     y = state.y_coords
     rot = hasproperty(state, :rotation) ? state.rotation : nothing
@@ -485,7 +629,11 @@ function generate_plots(state::AbstractState, config; output_prefix="results/mon
         unit=:auto,                    # auto-pick nm / μm / mm
         figsize=(1200,1200),
         dpi=200,
-        save_path=monomer_path
+    
+        save_path=monomer_path,
+        draw_contacts=true,       # (:auto draws in :detail/:medium; use true to force)
+        contact_scale=1.02,         # tolerance on 2r; 1.00 is strict touching
+        contact_max_lines= min(200_000, 10 * length(x)),  # cap so plots stay light
     )
 
     println("Saved:\n  ", monomer_path)

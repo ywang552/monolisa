@@ -42,7 +42,7 @@ config = Config(
     # max_monomers=1000000,
     max_monomers=100,
     # file_path=ARGS[1],
-    file_path="Claudins/c2_WT.txt",
+    file_path="Claudins/C2WT_masked90_zeroint.txt",
     grid_overlay = false,
     prog = 1
 )
@@ -69,13 +69,14 @@ generate_plots(state, config; output_prefix=prefix)
 state.rotation
 
 x = state.x_coords
-y = state.y_coords
+y = state.y_coords;
 
+# for i in 1:10
+#     for j in i+1:10
+#         if is_collision(x[i],y[1],x[j],y[j],1)
+#             println("!")
+#         end 
+#     end
+# end 
 
-for i in 1:10
-    for j in i+1:10
-        if is_collision(x[i],y[1],x[j],y[j],1)
-            println("!")
-        end 
-    end
-end 
+# generate_plots(state,config)
