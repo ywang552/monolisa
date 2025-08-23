@@ -64,10 +64,9 @@ mkpath(out_dir)
 name_noext, _ = splitext(basename(config.file_path))
 prefix = joinpath(out_dir, name_noext*"_123")
 
-generate_plots(state, config; show_contour=true, tm_style=:arcs)
-generate_plots(state, config; show_contour=false, tm_style=:ticks)
-
-generate_plots(state, config; show_contour=false, tm_style=:triangles, tm_size_frac=0.32)
+generate_plots(state, config; output_prefix = prefix*"arcs", show_contour=true, tm_style=:arcs)
+generate_plots(state, config; output_prefix = prefix*"ticks", show_contour=false, tm_style=:ticks)
+generate_plots(state, config; output_prefix = prefix*"triangles", show_contour=false, tm_style=:triangles, tm_size_frac=0.32)
 
 state.rotation
 

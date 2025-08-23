@@ -669,6 +669,13 @@ function plot_monomers_lod(
             if length(rotation) ≥ maxidx
                 vis_ids = collect(idx)
                 if r_plot_unit !== nothing
+                    bb_edges = backbone_edges_mst(xT, yT, r_plot_unit; xlim=xlim, ylim=ylim, contact_scale=contact_scale)
+                    plt_backbone = plot(size=(1200,1200), dpi=200, aspect_ratio=:equal, legend=false)
+                    scatter!(plt_backbone, xT, yT; marker=:circle, ms=3, color=:black, label=false)
+                    draw_backbone!(plt_backbone, xT, yT, bb_edges; color=:red, linewidth=2.0, alpha=0.8)
+                    if save_path !== nothing
+                        savefig(plt_backbone, replace(save_path, ".png" => "_backbone.png"))
+                    end
                     style = tm_style == :auto ? (show_contour ? :arcs : :ticks) : Symbol(tm_style)
 
                     if style == :arcs
