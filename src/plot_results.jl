@@ -65,7 +65,7 @@ function _draw_contacts_grid!(plt, x::AbstractVector, y::AbstractVector, r::Real
                 if dx*dx + dy*dy <= csq
                     # use 2-point VECTORS, not scalars/tuples
                     plot!(plt, [xi, xj], [yi, yj];
-                          seriestype=:path, color=:gray, alpha=0.5, linewidth=0.7)
+                          seriestype=:path, color=:grey, alpha=1, linewidth=4)
                     drawn += 1
                     drawn >= max_lines && return
                 end
@@ -73,6 +73,117 @@ function _draw_contacts_grid!(plt, x::AbstractVector, y::AbstractVector, r::Real
         end
     end
 end
+
+# -------------------------
+# Contact backbone (return-only)
+# -------------------------
+
+# Return contact edges (i,j) with their Euclidean distances (no plotting).
+function find_contact_edges(x::AbstractVector, y::AbstractVector, r::Real;
+                            xlim::Tuple, ylim::Tuple, contact_scale::Real=1.02)
+    N = length(x)
+    contact_r = 2r * contact_scale
+    cell = contact_r
+    csq = contact_r^2
+
+    gx(i) = Int(floor((x[i] - first(xlim)) / cell))
+    gy(i) = Int(floor((y[i] - first(ylim)) / cell))
+
+    buckets = Dict{Tuple{Int,Int}, Vector{Int}}()
+    for i in 1:N
+        xi, yi = x[i], y[i]
+        (isfinite(xi) && isfinite(yi)) || continue
+        push!(get!(buckets, (gx(i), gy(i)), Int[]), i)
+    end
+
+    offs  = ((-1,-1),(-1,0),(-1,1),(0,-1),(0,0),(0,1),(1,-1),(1,0),(1,1))
+    edges = Vector{Tuple{Int,Int}}()
+    dists = Float64[]
+
+    @inbounds for i in 1:N
+        xi = x[i]; yi = y[i]
+        (isfinite(xi) && isfinite(yi)) || continue
+        gi, gj = gx(i), gy(i)
+
+        for (di, dj) in offs
+            nbrs = get(buckets, (gi+di, gj+dj), nothing)
+            isnothing(nbrs) && continue
+            for j in nbrs
+                j <= i && continue
+                xj = x[j]; yj = y[j]
+                (isfinite(xj) && isfinite(yj)) || continue
+                dx = xj - xi; dy = yj - yi
+                dsq = dx*dx + dy*dy
+                if dsq <= csq
+                    push!(edges, (i, j))
+                    push!(dists, sqrt(dsq))
+                end
+            end
+        end
+    end
+
+    return edges, dists
+end
+
+# Minimal Union-Find for Kruskal MST
+mutable struct UF
+    parent::Vector{Int}
+    rank::Vector{Int}
+end
+UF(n::Int) = UF(collect(1:n), fill(0, n))
+function findset(uf::UF, a::Int)
+    while uf.parent[a] != a
+        uf.parent[a] = uf.parent[uf.parent[a]]
+        a = uf.parent[a]
+    end
+    return a
+end
+function unite!(uf::UF, a::Int, b::Int)
+    ra, rb = findset(uf, a), findset(uf, b)
+    ra == rb && return false
+    if uf.rank[ra] < uf.rank[rb]
+        uf.parent[ra] = rb
+    elseif uf.rank[rb] < uf.rank[ra]
+        uf.parent[rb] = ra
+    else
+        uf.parent[rb] = ra
+        uf.rank[ra] += 1
+    end
+    return true
+end
+
+"""
+    backbone_edges_mst(x, y, r; xlim, ylim, contact_scale=1.02)
+
+Return a *minimum-spanning forest* (MST per connected component) over the
+contact graph. Only returns the edges (i, j) — no plotting.
+"""
+function backbone_edges_mst(x::AbstractVector, y::AbstractVector, r::Real;
+                            xlim::Tuple, ylim::Tuple, contact_scale::Real=1.02)
+    N = length(x)
+    edges, dists = find_contact_edges(x, y, r; xlim=xlim, ylim=ylim, contact_scale=contact_scale)
+
+    # Sort edges by distance
+    order = sortperm(dists)
+    uf = UF(N)
+    backbone = Vector{Tuple{Int,Int}}()
+    for k in order
+        i, j = edges[k]
+        unite!(uf, i, j) && push!(backbone, (i, j))
+    end
+    return backbone
+end
+
+# Optional: draw a set of edges on a given plot (overlay helper)
+function draw_backbone!(plt, x::AbstractVector, y::AbstractVector, edges::Vector{Tuple{Int,Int}};
+                        color=:black, alpha=0.9, linewidth=3.0)
+    @inbounds for (i, j) in edges
+        plot!(plt, [x[i], x[j]], [y[i], y[j]];label = false,
+              seriestype=:path, color=color, alpha=alpha, linewidth=linewidth, linecap=:round)
+    end
+    return plt
+end
+
 
 
 # -------------------------
@@ -266,6 +377,101 @@ function _choose_compass_corner(xT::AbstractVector, yT::AbstractVector,
     return best, cx, cy, r
 end
 
+# --- TM style: short radial ticks (bars) ---
+function add_tm_ticks!(
+    plt, x::AbstractVector, y::AbstractVector, rotation::AbstractVector, r::Real;
+    indices = eachindex(x),
+    every::Int = 1,
+    len_frac::Real = 0.35,     # length of the bar relative to r
+    inset_frac::Real = 0.10,   # how far inside the rim the bar starts
+    lw::Union{Real,Symbol} = :auto,
+    colors = (:blue, :red, :yellow, :green),
+    alpha::Real = 0.95,
+)
+    # adaptive linewidth (in points)
+    L = length(indices)
+    lw_pts = lw === :auto ? max(0.8, 2.8 - 1.2*log10(max(L, 10))) : Float64(lw)
+
+    @inbounds for k in 1:every:length(indices)
+        i = indices[k]
+        xi = x[i]; yi = y[i]
+        rot0 = rotation[i]
+
+        for (j, adddeg) in enumerate((0.0, 90.0, 180.0, 270.0))
+            θ = (rot0 + adddeg) * π/180
+            c, s = cos(θ), sin(θ)
+
+            r0 = r*(1 - inset_frac)
+            r1 = r*(1 - inset_frac + len_frac)
+            x0 = xi + r0*c; y0 = yi + r0*s
+            x1 = xi + r1*c; y1 = yi + r1*s
+
+            plot!(plt, [x0, x1], [y0, y1];
+                  seriestype=:path, color=colors[j], alpha=alpha,
+                  linewidth=lw_pts, linecap=:round, label=false)
+        end
+    end
+    return plt
+end
+
+# --- TM style: tiny triangles (paddles) ---  (VECTOR-ONLY; no Shape)
+function add_tm_triangles!(
+    plt, x::AbstractVector, y::AbstractVector, rotation::AbstractVector, r::Real;
+    indices = eachindex(x),
+    every::Int = 1,
+    size_frac::Real = 0.28,  # overall marker size control
+    colors = (:blue, :red, :yellow, :green),
+    alpha::Real = 0.95,
+)
+    # geometry factors (relative to r)
+    tip_off   = 1.05
+    base_rad  = 0.85
+    base_half = 0.16
+    # mild scaling around default 0.28
+    tip_off   *= (1 + 0.6*(size_frac-0.28)/0.28)
+    base_rad  *= (1 - 0.4*(size_frac-0.28)/0.28)
+    base_half *= (1 + 0.8*(size_frac-0.28)/0.28)
+
+    @inbounds for k in 1:every:length(indices)
+        i = indices[k]
+        xi = x[i]; yi = y[i]
+        rot0 = rotation[i]
+
+        # skip any bad entries
+        (isfinite(xi) && isfinite(yi) && isfinite(rot0)) || continue
+
+        for (j, adddeg) in enumerate((0.0, 90.0, 180.0, 270.0))
+            θ = (rot0 + adddeg) * π/180
+            c, s = cos(θ), sin(θ)
+            ux, uy =  c,  s
+            tx, ty = -s,  c
+
+            tipx  = xi + (r*tip_off)*ux
+            tipy  = yi + (r*tip_off)*uy
+            basex = xi + (r*base_rad)*ux
+            basey = yi + (r*base_rad)*uy
+            v1x   = basex + (r*base_half)*tx
+            v1y   = basey + (r*base_half)*ty
+            v2x   = basex - (r*base_half)*tx
+            v2y   = basey - (r*base_half)*ty
+
+            # build as VECTORS (not tuples) — avoids Float64 series error
+            xs = Float64[tipx, v1x, v2x]
+            ys = Float64[tipy, v1y, v2y]
+
+            # final guard (just in case)
+            if all(isfinite, xs) && all(isfinite, ys)
+                plot!(plt, xs, ys;
+                      seriestype = :shape,
+                      fillcolor  = colors[j],
+                      fillalpha  = alpha,
+                      linecolor  = :transparent,
+                      label      = false)
+            end
+        end
+    end
+    return plt
+end
 
 
 # -------------------------
@@ -292,17 +498,24 @@ function plot_monomers_lod(
     lod::Symbol=:auto, sample_cap_points::Int=100_000,
     bins::Tuple{Int,Int}=(600,600),
     orient_every::Union{Int,Symbol}=:auto,
-    draw_contacts::Union{Bool,Symbol}=:auto,  # NEW: draw lines between touching monomers
-    contact_scale::Real=1.02,             # NEW: tolerance multiplier on 2r
-    contact_max_lines::Int=200_000,       # NEW: cap so plots don't get too heavy
-    orient_len::Union{Real,Symbol}=:auto,   # (kept for fallback arrows)
+    draw_contacts::Union{Bool,Symbol}=:auto,      # unchanged API
+    contact_scale::Real=1.02,
+    contact_max_lines::Int=200_000,
+    orient_len::Union{Real,Symbol}=:auto,
     marker_size::Union{Real,Symbol}=:auto,
     figsize::Tuple{Int,Int}=(1200,1200),
     dpi::Int=200,
     # physical units
-    real_scale_nm::Real = NM_PER_DATA,  # nm per data unit
-    unit::Union{Symbol,String} = :auto, # :auto | :nm | :μm | :mm
-    save_path=nothing
+    real_scale_nm::Real = NM_PER_DATA,
+    unit::Union{Symbol,String} = :auto,
+    save_path=nothing,
+    # NEW: outline + TM style controls
+    show_contour::Bool=true,
+    tm_style::Union{Symbol,String}=:auto,   # :auto | :arcs | :ticks | :triangles
+    tm_len_frac::Real=0.35,                 # ticks-only
+    tm_inset_frac::Real=0.10,               # ticks-only
+    tm_lw::Union{Real,Symbol}=:auto,        # ticks-only
+    tm_size_frac::Real=0.28                 # triangles-only
 )
     N = length(x)
     if isempty(x) || isempty(y)
@@ -310,10 +523,10 @@ function plot_monomers_lod(
         return
     end
 
-    # 1) Geometric transform (shift/fit) — ONE time
+    # 1) transform once
     xT, yT, s = transform_coords(x, y; mode=mode, scale=scale, target_max=target_max)
 
-    # 2) Physical conversion to nm, then pick display unit and divide
+    # 2) convert to physical units and then chosen display unit
     x_nm = xT .* real_scale_nm
     y_nm = yT .* real_scale_nm
     r_nm = monomer_radius === nothing ? nothing : Float64(monomer_radius) * s * real_scale_nm
@@ -321,9 +534,8 @@ function plot_monomers_lod(
     spanx_nm = maximum(x_nm) - minimum(x_nm)
     spany_nm = maximum(y_nm) - minimum(y_nm)
     span_nm  = max(spanx_nm, spany_nm)
-    
     u   = unit === :auto ? pick_unit(span_nm) : Symbol(unit)
-    div = unit_divisor(u)  # nm → chosen unit
+    div = unit_divisor(u)
 
     xT = x_nm ./ div
     yT = y_nm ./ div
@@ -334,33 +546,21 @@ function plot_monomers_lod(
         lod = N ≤ 100 ? :detail : (N ≤ 10_000 ? :medium : :massive)
     end
 
-    # --- AFTER: xT, yT, r_plot_unit are computed ---
-
-    # 4) Axis limits + ticks in chosen unit (with padding so circles aren't clipped)
+    # 4) limits + ticks (pad to avoid clipping)
     spanx = maximum(xT) - minimum(xT)
     spany = maximum(yT) - minimum(yT)
-
-    # pad: one outer radius (plus a small safety for stroke/arc), or 2% of span if radius unknown
     pad = r_plot_unit !== nothing ? 1.15 * r_plot_unit : 0.02 * max(spanx, spany)
 
-    # default limits if not provided
     if xlim === nothing || ylim === nothing
-        xlo = minimum(xT) - pad
-        xhi = maximum(xT) + pad
-        ylo = minimum(yT) - pad
-        yhi = maximum(yT) + pad
-        xlim = (xlo, xhi)
-        ylim = (ylo, yhi)
+        xlim = (minimum(xT) - pad, maximum(xT) + pad)
+        ylim = (minimum(yT) - pad, maximum(yT) + pad)
     else
-        # respect user limits but still ensure padding
         xlim = (first(xlim) - pad, last(xlim) + pad)
         ylim = (first(ylim) - pad, last(ylim) + pad)
     end
 
-        # Use different variable names to avoid colliding with Plots.xticks function
     xtick_vals = nothing
     ytick_vals = nothing
-
     if tick_step === :auto
         step = nice_tick_step(max(last(xlim)-first(xlim), last(ylim)-first(ylim)))
         x0 = first(xlim) - mod(first(xlim), step)
@@ -373,12 +573,9 @@ function plot_monomers_lod(
         ytick_vals = collect(first(ylim):step:last(ylim))
     end
 
-
-
-    # 5) Auto marker size from physical radius if available
+    # 5) marker size
     ms_from_radius = nothing
     if r_plot_unit !== nothing && lod != :massive
-        # data radius (chosen unit) -> screen points
         data_diam_points = function(r_data, xlim, ylim, figsize, dpi)
             wpx, hpx = figsize
             spanx_ = last(xlim) - first(xlim)
@@ -395,14 +592,14 @@ function plot_monomers_lod(
     ms_auto  = (lod == :detail ? 8.0 : (lod == :medium ? 4.0 : 0.0)) * px_scale
     ms_final = marker_size === :auto ? (ms_from_radius === nothing ? ms_auto : ms_from_radius) : Float64(marker_size)
 
-
-    # 6) Orientation sampling density
+    # 6) orientation sampling
     target_arrows = lod == :detail ? 200 : 120
     oe_auto = max(1, Int(ceil(N / target_arrows)))
     oe = orient_every === :auto ? oe_auto : Int(orient_every)
 
-    # 7) Plot
+    # 7) plot
     plt = nothing
+
     if lod == :massive
         counts, xedges, yedges = density_grid(
             clamp.(xT, first(xlim), last(xlim)),
@@ -412,7 +609,6 @@ function plot_monomers_lod(
             aspect_ratio=:equal, legend=false, dpi=dpi, size=figsize,
             xlim=xlim, ylim=ylim, xticks=xtick_vals, yticks=ytick_vals,
             color=cgrad([:blue, :red]))
-
     else
         idx = 1:length(xT)
         if lod == :medium && N > sample_cap_points
@@ -420,32 +616,37 @@ function plot_monomers_lod(
             idx = 1:stride:length(xT)
         end
 
+        # contour toggle
+        contour_color = show_contour ? :black : :transparent
+        contour_width = show_contour ? 2.0 : 0.0
+
         plt = scatter(xT[idx], yT[idx];
             marker=:circle, ms=ms_final,
-            markercolor=:white, markerstrokecolor=:black, markerstrokewidth=2.0,
+            markercolor=:white,
+            markerstrokecolor=contour_color,
+            markerstrokewidth=contour_width,
             linecolor=:transparent, aspect_ratio=:equal, legend=false, grid=false,
             dpi=dpi, size=figsize,
             xlim=xlim, ylim=ylim, xticks=xtick_vals, yticks=ytick_vals)
 
-        draw_contacts_bool = true 
-                # --- Contact lines (if radius is known) ---
-        if draw_contacts_bool && r_plot_unit !== nothing
+        # optional contact lines (uses your grid accel)
+        do_contacts = (draw_contacts === :auto ? (lod != :massive) : draw_contacts) && (r_plot_unit !== nothing)
+        if do_contacts
             _draw_contacts_grid!(plt, xT[idx], yT[idx], r_plot_unit;
-                                xlim=xlim, ylim=ylim,
-                                contact_scale=contact_scale,
-                                max_lines=contact_max_lines)
+                                 xlim=xlim, ylim=ylim,
+                                 contact_scale=contact_scale,
+                                 max_lines=contact_max_lines)
         end
 
-                # --- Compass Legend (auto-corner) ---
+        # compass legend in least-occupied corner
         begin
-            best, cx, cy, r = _choose_compass_corner(xT, yT, xlim, ylim;
-                                                    size_frac=0.12, margin_frac=0.05,
-                                                    sample_cap=sample_cap_points)
-
+            _, cx, cy, rcomp = _choose_compass_corner(xT, yT, xlim, ylim;
+                                                      size_frac=0.12, margin_frac=0.05,
+                                                      sample_cap=sample_cap_points)
             θ = range(0, 2π; length=200)
-            plot!(plt, cx .+ r .* cos.(θ), cy .+ r .* sin.(θ);
+            plot!(plt, cx .+ rcomp .* cos.(θ), cy .+ rcomp .* sin.(θ);
                 seriestype=:path, color=:black, linewidth=1.5,
-                fillcolor=RGBA(0,0,0,0))
+                fillcolor=RGBA(0,0,0,0), label=false)
 
             dirs = [
                 (0.0,        :blue,   "0/360"),
@@ -453,92 +654,95 @@ function plot_monomers_lod(
                 (π,          :yellow, "180"),
                 (3π/2,       :green,  "270"),
             ]
-
             for (ang, col, lab) in dirs
-                x1, y1 = cx + 0.65*r*cos(ang), cy + 0.65*r*sin(ang)
-                x2, y2 = cx + 1.00*r*cos(ang), cy + 1.00*r*sin(ang)
-                plot!(plt, [x1, x2], [y1, y2]; color=col, linewidth=2.0, linecap=:round)
-
-                xt, yt = cx + 1.22*r*cos(ang), cy + 1.22*r*sin(ang)
+                x1, y1 = cx + 0.65*rcomp*cos(ang), cy + 0.65*rcomp*sin(ang)
+                x2, y2 = cx + 1.00*rcomp*cos(ang), cy + 1.00*rcomp*sin(ang)
+                plot!(plt, [x1, x2], [y1, y2]; color=col, linewidth=2.0, linecap=:round, label=false)
+                xt, yt = cx + 1.22*rcomp*cos(ang), cy + 1.22*rcomp*sin(ang)
                 annotate!(plt, xt, yt, text(lab, 9, col, :center))
             end
         end
 
-        # Spin ticks (rim segments) if we have rotation + radius
+        # --- TM marker rendering (style switch) ---
         if show_orientation && rotation !== nothing && !isempty(rotation)
             maxidx = maximum(collect(idx))
             if length(rotation) ≥ maxidx
                 vis_ids = collect(idx)
                 if r_plot_unit !== nothing
-                    add_orientation_arcs!(plt, xT, yT, rotation, r_plot_unit;
-                                          indices=vis_ids,
-                                          every=oe,
-                                          arc_span_deg=25.0,      # length along rim
-                                          thickness_frac=0.45,    # thickness toward center
-                                          color=:blue, alpha=0.95)
+                    style = tm_style == :auto ? (show_contour ? :arcs : :ticks) : Symbol(tm_style)
 
-                                # --- Additional 90° ticks in yellow ---
-                    add_orientation_arcs!(plt, xT, yT, rotation .+ 90.0, r_plot_unit;
-                                        indices=vis_ids,
-                                        every=oe,
-                                        arc_span_deg=25.0,
-                                        thickness_frac=0.45,
-                                        color=:red, alpha=0.95)
+                    if style == :arcs
+                        add_orientation_arcs!(plt, xT, yT, rotation, r_plot_unit;
+                                              indices=vis_ids, every=oe,
+                                              arc_span_deg=25.0, thickness_frac=0.45,
+                                              color=:blue,  alpha=0.95)
+                        add_orientation_arcs!(plt, xT, yT, rotation .+ 90.0, r_plot_unit;
+                                              indices=vis_ids, every=oe,
+                                              arc_span_deg=25.0, thickness_frac=0.45,
+                                              color=:red,   alpha=0.95)
+                        add_orientation_arcs!(plt, xT, yT, rotation .+ 180.0, r_plot_unit;
+                                              indices=vis_ids, every=oe,
+                                              arc_span_deg=25.0, thickness_frac=0.45,
+                                              color=:yellow,alpha=0.95)
+                        add_orientation_arcs!(plt, xT, yT, rotation .+ 270.0, r_plot_unit;
+                                              indices=vis_ids, every=oe,
+                                              arc_span_deg=25.0, thickness_frac=0.45,
+                                              color=:green, alpha=0.95)
 
-                    add_orientation_arcs!(plt, xT, yT, rotation .+ 180.0, r_plot_unit;
-                                        indices=vis_ids,
-                                        every=oe,
-                                        arc_span_deg=25.0,
-                                        thickness_frac=0.45,
-                                        color=:yellow, alpha=0.95)
+                    elseif style == :ticks
+                        add_tm_ticks!(plt, xT, yT, rotation, r_plot_unit;
+                                      indices=vis_ids, every=oe,
+                                      len_frac=tm_len_frac, inset_frac=tm_inset_frac,
+                                      lw=tm_lw, colors=(:blue,:red,:yellow,:green), alpha=0.95)
 
-                    add_orientation_arcs!(plt, xT, yT, rotation .+ 270.0, r_plot_unit;
-                                        indices=vis_ids,
-                                        every=oe,
-                                        arc_span_deg=25.0,
-                                        thickness_frac=0.45,
-                                        color=:green, alpha=0.95)
+                    elseif style == :triangles
+                        add_tm_triangles!(plt, xT, yT, rotation, r_plot_unit;
+                                          indices=vis_ids, every=oe,
+                                          size_frac=tm_size_frac,
+                                          colors=(:blue,:red,:yellow,:green), alpha=0.95)
+                    else
+                        @warn "tm_style=$style not recognized; falling back to :ticks"
+                        add_tm_ticks!(plt, xT, yT, rotation, r_plot_unit;
+                                      indices=vis_ids, every=oe,
+                                      len_frac=tm_len_frac, inset_frac=tm_inset_frac,
+                                      lw=tm_lw, colors=(:blue,:red,:yellow,:green), alpha=0.95)
+                    end
                 else
-                    # fallback arrows if no radius available
+                    # fallback arrows if no radius
                     oidx = vis_ids[1:oe:length(vis_ids)]
-                    # small arrows, scaled to axis span
                     spanu = max(spanx, spany)
                     alen = 0.03 * spanu
                     u = cosd.(rotation[oidx]); v = sind.(rotation[oidx])
                     quiver!(plt, xT[oidx], yT[oidx], quiver=(u .* alen, v .* alen);
-                            lw=0.5, alpha=0.8, linecolor=:black)
+                            lw=0.5, alpha=0.8, linecolor=:black, label=false)
                 end
             end
         end
     end
 
-    # Optional grid overlay using same unit scale
+    # optional grid overlay
     if show_grid && boxSize !== nothing
-        # boxSize is in data units → convert to chosen unit
         scaled_box = Float64(boxSize) * s * (real_scale_nm / div)
         x_end, y_end = last(xlim), last(ylim)
         for xg in 0:scaled_box:x_end
-            plot!(plt, [xg, xg], [first(ylim), y_end], lw=0.5, alpha=0.3, linecolor=:gray)
+            plot!(plt, [xg, xg], [first(ylim), y_end], lw=0.5, alpha=0.3, linecolor=:gray, label=false)
         end
         for yg in 0:scaled_box:y_end
-            plot!(plt, [first(xlim), x_end], [yg, yg], lw=0.5, alpha=0.3, linecolor=:gray)
+            plot!(plt, [first(xlim), x_end], [yg, yg], lw=0.5, alpha=0.3, linecolor=:gray, label=false)
         end
     end
 
     xlabel!(plt, "Distance ($(unit_label(u)))")
     ylabel!(plt, "Distance ($(unit_label(u)))")
 
-
     if save_path !== nothing
         savefig(plt, save_path)
         println("Plot saved to: $save_path")
     end
 
-
-    plot_W_vs_K(state.W, state.K; normalize_W=true, save_path=save_path*"W_vs_K.png")
-
     return plt
 end
+
 
 
 using Plots
@@ -601,43 +805,70 @@ end
 # -------------------------
 using Base.Filesystem: basename
 
-function generate_plots(state::AbstractState, config; output_prefix="plots/tmp/")
+function generate_plots(state::AbstractState, config;
+                        output_prefix="plots/tmp/",
+                        # outline + TM style options (surface here once)
+                        show_contour::Bool=true,
+                        tm_style::Union{Symbol,String}=:auto,
+                        tm_len_frac::Real=0.35,
+                        tm_inset_frac::Real=0.10,
+                        tm_lw::Union{Real,Symbol}=:auto,
+                        tm_size_frac::Real=0.28)
     x = state.x_coords
     y = state.y_coords
     rot = hasproperty(state, :rotation) ? state.rotation : nothing
     box_size = state.box_size
-    overlay = config.grid_overlay
+    overlay = getfield(config, :grid_overlay)  # avoids getproperty overload surprises
     file_name = basename(config.file_path)
     N = length(x)
 
     lod = N ≤ 100 ? :detail : (N ≤ 10_000 ? :medium : :massive)
 
     monomer_path = "$(output_prefix)_$(N)_$(file_name)_placement.png"
+
     plot_monomers_lod(
         x, y;
         rotation=rot,
         boxSize=box_size,
-        monomer_radius=state.radius,   # data units
+        monomer_radius=state.radius,     # in data units
         show_grid=overlay,
         show_orientation=(lod != :massive),
         lod=lod,
         tick_step=:auto,
-        orient_every = 1,
+        orient_every=1,
         mode=:min,
-        scale=:identity,               # important: no extra fit if you want physical axes
-        real_scale_nm=NM_PER_DATA,     # 0.37 nm/data unit
-        unit=:auto,                    # auto-pick nm / μm / mm
+        scale=:identity,                 # physical axes respected
+        real_scale_nm=NM_PER_DATA,       # 0.37 nm/data unit
+        unit=:auto,
         figsize=(1200,1200),
         dpi=200,
-    
         save_path=monomer_path,
-        draw_contacts=true,       # (:auto draws in :detail/:medium; use true to force)
-        contact_scale=1.02,         # tolerance on 2r; 1.00 is strict touching
-        contact_max_lines= min(200_000, 10 * length(x)),  # cap so plots stay light
+        draw_contacts=true,
+        contact_scale=1.02,
+        contact_max_lines=min(200_000, 10 * length(x)),
+        # NEW
+        show_contour=show_contour,
+        tm_style=tm_style,
+        tm_len_frac=tm_len_frac,
+        tm_inset_frac=tm_inset_frac,
+        tm_lw=tm_lw,
+        tm_size_frac=tm_size_frac,
     )
 
     println("Saved:\n  ", monomer_path)
+
+    # Optional side-by-side W vs K if available on state
+    if hasproperty(state, :W) && hasproperty(state, :K)
+        out_wk = replace(monomer_path, "_placement.png" => "_W_vs_K.png")
+        try
+            plot_W_vs_K(state.W, state.K; normalize_W=true, save_path=out_wk)
+        catch err
+            @warn "plot_W_vs_K failed: $err"
+        end
+    end
 end
+
+
 
 # If you want to run directly, add your loader here:
 if abspath(PROGRAM_FILE) == @__FILE__
