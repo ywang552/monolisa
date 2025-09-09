@@ -21,76 +21,145 @@ const DEG2RAD = π/180
 
 
 """
-Draw contact lines between disks of radius r at positions (x,y).
-Uses a spatial grid so we only check local neighbors.
-- Only draws if r is provided (not `nothing`)
-- contact_scale lets you be a bit lenient (e.g., 1.02).
+draw_edges!(plt, x, y, edges; lc=:grey, lw=2, alpha=1.0)
+Overlay straight segments for each (i,j) pair.
 """
+function draw_edges!(plt, x::AbstractVector, y::AbstractVector,
+                     edges::Vector{Tuple{Int,Int}}; lc=:grey, lw=2, alpha=1.0)
+    @inbounds for (i,j) in edges
+        plot!(plt, @view(x[[i,j]]), @view(y[[i,j]]);
+              seriestype=:path, color=lc, linewidth=lw, alpha=alpha)
+    end
+    return plt
+end
+
+using Graphs
+using Plots
+using Random
+using Colors: RGB
+
+# --- f1: features from x,y,edges ---------------------------------------------
+
+"""
+backbone_features(x, y, edges) -> (; segments, endpoints, junctions)
+
+Thin wrapper around `segments_from_backbone` that returns a NamedTuple,
+so the result can be passed around cleanly.
+"""
+function backbone_features(x::AbstractVector{<:Real},
+                           y::AbstractVector{<:Real},
+                           edges::Vector{Tuple{Int,Int}})
+    segments, endpoints, junctions = segments_from_backbone(x, y, edges)
+    return (; segments, endpoints, junctions)
+end
+
+# --- f2: draw the raw backbone edges -----------------------------------------
+
+"""
+draw_backbone!(plt, x, y, edges; lc=:grey, lw=2, alpha=1.0)
+
+Draw straight segments for each undirected edge (i,j).
+Does not compute features or color by segment—kept minimal by design.
+"""
+function draw_backbone!(plt,
+                        x::AbstractVector, y::AbstractVector,
+                        edges::Vector{Tuple{Int,Int}}; lc=:grey, lw::Real=2, alpha::Real=1.0)
+    @inbounds for (i, j) in edges
+        # discontiguous → make a tiny container; no @view here
+        plot!(plt, [x[i], x[j]], [y[i], y[j]];
+              seriestype=:path, color=lc, linewidth=lw, alpha=alpha)
+    end
+    return plt
+end
+
+# --- f3: overlay segments + vertex markers -----------------------------------
+
+"""
+overlay_segments_vertices!(plt, x, y, features;
+                           segment_mode=:random, endpoints_color=:cyan,
+                           junctions_color=:green, seg_lw=2)
+
+Overlay per-segment polylines (distinct colors) and vertex markers (endpoints/junctions).
+`features` is the NamedTuple returned by `backbone_features`.
+segment_mode = :random (RGB via seeded RNG) or :cmap (categorical colormap).
+"""
+function overlay_segments_vertices!(plt,
+                                    x::AbstractVector, y::AbstractVector,
+                                    features::NamedTuple;
+                                    segment_mode::Symbol = :random,
+                                    endpoints_color=:cyan,
+                                    junctions_color=:green,
+                                    seg_lw::Real=2,
+                                    v_ms = 2, 
+                                    # NEW:
+                                    turning_vertices::AbstractVector{<:Integer}=Int[],
+                                    turning_color=:orange,
+                                    turning_ms::Real=6,
+                                    turning_marker::Symbol=:square)
+
+    segments    = features.segments
+    endpoints   = get(features, :endpoints, Int[])
+    junctions   = get(features, :junctions, Int[])
+
+    if segment_mode === :random
+        rng = MersenneTwister(42)
+        for seg in segments
+            if length(seg) ≥ 2
+                plot!(plt, x[seg], y[seg];
+                      lw=seg_lw, color=RGB(rand(rng), rand(rng), rand(rng)))
+            end
+        end
+    elseif segment_mode === :cmap
+        cmap = cgrad(:viridis, max(length(segments), 1), categorical=true)
+        for (k, seg) in enumerate(segments)
+            if length(seg) ≥ 2
+                plot!(plt, x[seg], y[seg]; lw=seg_lw, color=cmap[k])
+            end
+        end
+    else
+        error("segment_mode must be :random or :cmap")
+    end
+
+    # draw markers last so they sit on top
+    if !isempty(endpoints)
+        scatter!(plt, x[endpoints], y[endpoints]; m=:circle, ms=v_ms, color=endpoints_color)
+    end
+    if !isempty(junctions)
+        scatter!(plt, x[junctions], y[junctions]; m=:circle, ms=v_ms, color=junctions_color)
+    end
+    if !isempty(turning_vertices)
+        scatter!(plt, x[turning_vertices], y[turning_vertices];
+                 m=:square, ms=turning_ms, color=turning_color)
+    end
+    return plt
+end
+
+
 function _draw_contacts_grid!(plt, x::AbstractVector, y::AbstractVector, r::Real;
                               xlim::Tuple, ylim::Tuple,
                               contact_scale::Real=1.02,
-                              max_lines::Int=200_000)
-
-    N = length(x)
-    contact_r = 2*r*contact_scale          # <- ensure the * is here (not `2r`)
-    cell = contact_r
-
-    # grid bucketing
-    gx(i) = Int(floor((x[i] - first(xlim)) / cell))
-    gy(i) = Int(floor((y[i] - first(ylim)) / cell))
-    buckets = Dict{Tuple{Int,Int}, Vector{Int}}()
-    for i in 1:N
-        key = (gx(i), gy(i))
-        push!(get!(buckets, key, Int[]), i)
-    end
-
-    offs = ((-1,-1),(-1,0),(-1,1),(0,-1),(0,0),(0,1),(1,-1),(1,0),(1,1))
-    drawn = 0
-    csq = contact_r^2
-
-    for i in 1:N
-        xi = x[i]; yi = y[i]
-        isfinite(xi) && isfinite(yi) || continue
-        gi, gj = gx(i), gy(i)
-
-        for (di, dj) in offs
-            nbrs = get(buckets, (gi+di, gj+dj), nothing)
-            isnothing(nbrs) && continue
-            for j in nbrs
-                j <= i && continue
-                xj = x[j]; yj = y[j]
-                isfinite(xj) && isfinite(yj) || continue
-
-                dx = xj - xi; dy = yj - yi
-                if dx*dx + dy*dy <= csq
-                    # use 2-point VECTORS, not scalars/tuples
-                    plot!(plt, [xi, xj], [yi, yj];
-                          seriestype=:path, color=:grey, alpha=1, linewidth=4)
-                    drawn += 1
-                    drawn >= max_lines && return
-                end
-            end
-        end
-    end
+                              max_lines::Int=200_000, lw=2, color=:black)
+    edges = find_contact_edges(x, y, r; xlim=xlim, ylim=ylim,
+                               contact_scale=contact_scale, max_edges=max_lines)
+    draw_backbone!(plt, x, y, edges; lc=color, lw=lw, alpha=1.0)
+    return edges
 end
 
-# -------------------------
-# Contact backbone (return-only)
-# -------------------------
 
-# Return contact edges (i,j) with their Euclidean distances (no plotting).
 function find_contact_edges(x::AbstractVector, y::AbstractVector, r::Real;
-                            xlim::Tuple, ylim::Tuple, contact_scale::Real=1.02)
+                            xlim::Tuple, ylim::Tuple, contact_scale::Real=1.02,
+                            max_edges::Int=200_000)
+    @assert length(x) == length(y)
     N = length(x)
-    contact_r = 2r * contact_scale
-    cell = contact_r
+    contact_r = 2 * r * contact_scale   # <-- fix 2*r
     csq = contact_r^2
+    cell = contact_r
 
     gx(i) = Int(floor((x[i] - first(xlim)) / cell))
     gy(i) = Int(floor((y[i] - first(ylim)) / cell))
 
     buckets = Dict{Tuple{Int,Int}, Vector{Int}}()
-    for i in 1:N
+    @inbounds for i in 1:N
         xi, yi = x[i], y[i]
         (isfinite(xi) && isfinite(yi)) || continue
         push!(get!(buckets, (gx(i), gy(i)), Int[]), i)
@@ -98,31 +167,26 @@ function find_contact_edges(x::AbstractVector, y::AbstractVector, r::Real;
 
     offs  = ((-1,-1),(-1,0),(-1,1),(0,-1),(0,0),(0,1),(1,-1),(1,0),(1,1))
     edges = Vector{Tuple{Int,Int}}()
-    dists = Float64[]
 
-    @inbounds for i in 1:N
-        xi = x[i]; yi = y[i]
-        (isfinite(xi) && isfinite(yi)) || continue
-        gi, gj = gx(i), gy(i)
-
+    @inbounds for (gi, gj) in keys(buckets)
+        ids = buckets[(gi,gj)]
         for (di, dj) in offs
             nbrs = get(buckets, (gi+di, gj+dj), nothing)
             isnothing(nbrs) && continue
-            for j in nbrs
-                j <= i && continue
-                xj = x[j]; yj = y[j]
-                (isfinite(xj) && isfinite(yj)) || continue
-                dx = xj - xi; dy = yj - yi
-                dsq = dx*dx + dy*dy
-                if dsq <= csq
-                    push!(edges, (i, j))
-                    push!(dists, sqrt(dsq))
+            for i in ids
+                xi, yi = x[i], y[i]
+                for j in nbrs
+                    j <= i && continue
+                    dx = x[j]-xi; dy = y[j]-yi
+                    if dx*dx + dy*dy <= csq
+                        push!(edges, (i,j))
+                        length(edges) >= max_edges && return edges
+                    end
                 end
             end
         end
     end
-
-    return edges, dists
+    return edges
 end
 
 # Minimal Union-Find for Kruskal MST
@@ -174,14 +238,159 @@ function backbone_edges_mst(x::AbstractVector, y::AbstractVector, r::Real;
     return backbone
 end
 
-# Optional: draw a set of edges on a given plot (overlay helper)
-function draw_backbone!(plt, x::AbstractVector, y::AbstractVector, edges::Vector{Tuple{Int,Int}};
-                        color=:black, alpha=0.9, linewidth=3.0)
-    @inbounds for (i, j) in edges
-        plot!(plt, [x[i], x[j]], [y[i], y[j]];label = false,
-              seriestype=:path, color=color, alpha=alpha, linewidth=linewidth, linecap=:round)
+"""
+turning_vertices_from_edges(x, y, edges; angle_thresh_deg=30.0)
+
+Mark nodes with degree==2 whose angle between the two incident edges
+(at the node) is >= angle_thresh_deg. Returns Vector{Int}.
+"""
+function turning_vertices_from_edges(x::AbstractVector, y::AbstractVector,
+                                     edges::Vector{Tuple{Int,Int}};
+                                     angle_thresh_deg::Real=20.0,
+                                     min_edge_len::Real=1e-9)
+
+    th = deg2rad(angle_thresh_deg)
+
+    # adjacency
+    adj = Dict{Int, Vector{Int}}()
+    for (u,v) in edges
+        push!(get!(adj,u,Int[]), v)
+        push!(get!(adj,v,Int[]), u)
     end
-    return plt
+
+    turns = Int[]
+    for (i, nbrs) in adj
+        length(nbrs) == 2 || continue
+        a, b = nbrs[1], nbrs[2]
+
+        v1x, v1y = x[a]-x[i], y[a]-y[i]
+        v2x, v2y = x[b]-x[i], y[b]-y[i]
+        n1 = hypot(v1x, v1y); n2 = hypot(v2x, v2y)
+        (n1 < min_edge_len || n2 < min_edge_len) && continue
+
+        # angle between rays ∈ [0, π]
+        dot   = v1x*v2x + v1y*v2y
+        cross = v1x*v2y - v1y*v2x
+        ang = atan(abs(cross), dot)      # 0..π
+
+        # deviation from straight (π) → 0 for straight, large for turns
+        dev = π - ang
+
+        if dev ≥ th
+            push!(turns, i)
+        end
+    end
+    return turns
+end
+
+
+"""
+turning_vertices_from_segments(x, y, segments;
+                               angle_thresh_deg=60.0, min_gap=2)
+Return a Set{Int} of nodes (degree-2 along the path) whose signed turn angle
+|Δθ| exceeds angle_thresh_deg. min_gap prevents two splits too close together.
+"""
+function turning_vertices_from_segments(x::AbstractVector, y::AbstractVector,
+                                        segments::Vector{Vector{Int}};
+                                        angle_thresh_deg::Real=60.0,
+                                        min_gap::Int=2)
+    th = deg2rad(angle_thresh_deg)
+    turning = Set{Int}()
+
+    for seg in segments
+        L = length(seg)
+        L < 3 && continue
+        last_split_k = -typemax(Int)
+        @inbounds for k in 2:L-1
+            i_prev, i, i_next = seg[k-1], seg[k], seg[k+1]
+            v1x, v1y = x[i] - x[i_prev], y[i] - y[i_prev]
+            v2x, v2y = x[i_next] - x[i], y[i_next] - y[i]
+            # skip degenerate steps
+            norm1 = hypot(v1x, v1y); norm2 = hypot(v2x, v2y)
+            (norm1 == 0 || norm2 == 0) && continue
+
+            # signed turn angle in (-π, π]
+            a1 = atan(v1y, v1x)
+            a2 = atan(v2y, v2x)
+            dθ = a2 - a1
+            dθ = (dθ + π) % (2π) - π  # wrap to (-π,π]
+
+            if abs(dθ) ≥ th && (k - last_split_k) ≥ min_gap
+                push!(turning, i)
+                last_split_k = k
+            end
+        end
+    end
+    return turning
+end
+
+"""
+refine_segments_by_curvature(x, y, segments;
+    angle_thresh_deg=60.0, min_gap=2,
+    keep_short=true, min_len=2,
+    include_turn_in_prev=true)
+
+- Splits at curvature peaks (from turning_vertices_from_segments).
+- Ensures segments have >=2 nodes unless keep_short=true.
+- include_turn_in_prev: if true, left piece ends at the turning vertex;
+  if false, left piece ends at (k-1) and the turning vertex starts the right piece.
+"""
+function refine_segments_by_curvature(x::AbstractVector, y::AbstractVector,
+                                      segments::Vector{Vector{Int}};
+                                      angle_thresh_deg::Real=60.0,
+                                      min_gap::Int=2,
+                                      keep_short::Bool=true,
+                                      min_len::Int=2,
+                                      include_turn_in_prev::Bool=true)
+
+    # detect turning nodes (degree-2 along path) above threshold
+    tset = turning_vertices_from_segments(x, y, segments;
+                                          angle_thresh_deg=angle_thresh_deg,
+                                          min_gap=min_gap)
+
+    new_segments = Vector{Vector{Int}}()
+
+    # helper: push only if useful length
+    @inline function maybe_push!(out, segslice)
+        L = length(segslice)
+        if L ≥ max(2, min_len) || (keep_short && L ≥ 2)
+            push!(out, segslice)
+        end
+    end
+
+    for seg in segments
+        L = length(seg)
+        if L < 3
+            maybe_push!(new_segments, seg)
+            continue
+        end
+
+        start_idx = 1
+        k = 2
+        while k ≤ L-1
+            if seg[k] in tset
+                # choose split boundary behavior
+                left_end = include_turn_in_prev ? k : (k-1)
+                right_start = k
+
+                # left piece [start_idx .. left_end]
+                if left_end ≥ start_idx
+                    maybe_push!(new_segments, seg[start_idx:left_end])
+                end
+
+                # next piece starts at the turning vertex (or its index)
+                start_idx = right_start
+            end
+            k += 1
+        end
+
+        # tail
+        if start_idx ≤ L
+            maybe_push!(new_segments, seg[start_idx:L])
+        end
+    end
+
+    return new_segments, collect(tset)
 end
 
 
@@ -271,22 +480,6 @@ end
 # -------------------------
 # Spin tick: ring segment
 # -------------------------
-"""
-Make a filled ring-segment polygon centered at (cx,cy).
-- r: outer radius (plot units, i.e., final chosen unit)
-- t: thickness as fraction of r (0..1)
-- θ: center angle (deg; 0° = +x axis, CCW)
-"""
-function ring_sector_shape(cx, cy, r, t, θ; span=20.0, ns=12)
-    rin  = max(r*(1 - t), 0.0)
-    θ0   = (θ - span/2) * DEG2RAD
-    θ1   = (θ + span/2) * DEG2RAD
-    outer = [(cx + r*cos(ang),  cy + r*sin(ang)) for ang in range(θ0, θ1, length=ns)]
-    inner = [(cx + rin*cos(ang), cy + rin*sin(ang)) for ang in range(θ1, θ0, length=ns)]
-    pts = vcat(outer, inner)
-    xs = first.(pts); ys = last.(pts)
-    return Shape(xs, ys)
-end
 
 """
 Overlay rim-segment spin markers on visible points.
@@ -516,13 +709,6 @@ function plot_monomers_lod(
     tm_inset_frac::Real=0.10,
     tm_lw::Union{Real,Symbol}=:auto,
     tm_size_frac::Real=0.28,
-    # NEW: backbone overlay controls
-    backbone_overlay::Symbol = :none,       # :none | :curvature
-    overlay_corner_angle_deg::Real = 25.0,
-    overlay_simplify::Union{Nothing,Real,Symbol} = :auto,  # :auto uses r_plot_unit
-    overlay_resample::Union{Nothing,Real,Symbol} = :auto,  # :auto uses r_plot_unit
-    overlay_lw::Real = 3.0,
-    overlay_alpha::Real = 0.95
 )
     N = length(x)
     if isempty(x) || isempty(y)
@@ -636,27 +822,149 @@ function plot_monomers_lod(
             dpi=dpi, size=figsize,
             xlim=xlim, ylim=ylim, xticks=xtick_vals, yticks=ytick_vals)
 
-        # optional contact lines (uses your grid accel)
+        # --- Backbone (finder + raw draw) -------------------------
         do_contacts = (draw_contacts === :auto ? (lod != :massive) : draw_contacts) && (r_plot_unit !== nothing)
+        edges = Tuple{Int,Int}[]
         if do_contacts
-            _draw_contacts_grid!(plt, xT[idx], yT[idx], r_plot_unit;
-                                 xlim=xlim, ylim=ylim,
-                                 contact_scale=contact_scale,
-                                 max_lines=contact_max_lines)
+            # Use FULL xT/yT for geometry; don't subsample with idx
+            edges = find_contact_edges(xT, yT, r_plot_unit;
+                                    xlim=xlim, ylim=ylim,
+                                    contact_scale=contact_scale,
+                                    max_edges=contact_max_lines)
+            draw_backbone!(plt, xT, yT, edges; lc=:black, lw=1.5, alpha=0.9)  # f2
         end
 
-        # compute backbone once here (we'll use it for overlay and debug PNG)
-        bb_edges = nothing
+        
+
+        # --- Standalone backbone figure with colored segments + vertices -------------
+        plt_backbone = plot(; size=(1600,1600), aspect_ratio=:equal, legend=false, xlim=xlim, ylim=ylim)
         if r_plot_unit !== nothing
-            bb_edges = backbone_edges_mst(xT, yT, r_plot_unit; xlim=xlim, ylim=ylim, contact_scale=contact_scale)
-            # optional tiny debug image of just the backbone
-            plt_backbone = plot(size=(800,800), dpi=200, aspect_ratio=:equal, legend=false)
-            scatter!(plt_backbone, xT, yT; marker=:circle, ms=2.5, color=:black, label=false)
-            draw_backbone!(plt_backbone, xT, yT, bb_edges; color=:red, linewidth=2.0, alpha=0.8)
+            edges_back = isempty(edges) ? find_contact_edges(xT, yT, r_plot_unit;
+                                                            xlim=xlim, ylim=ylim,
+                                                            contact_scale=contact_scale,
+                                                            max_edges=contact_max_lines) : edges
+            # base backbone
+            draw_backbone!(plt_backbone, xT, yT, edges_back; lc=:black, lw=2, alpha=0.9)
+
+            # DEGREE-BASED FEATURES (f1)
+            feat = backbone_features(xT, yT, edges_back)
+
+            # 💡 CURVATURE REFINEMENT (split at turning points)
+            # 1) detect + split with looser params
+            # segments2, tverts = refine_segments_by_curvature(
+            #     xT, yT, feat.segments;
+            #     angle_thresh_deg = 30.0,   # ↓ from 60
+            #     min_gap = 1                # ↓ from 2
+            # )
+
+            
+
+            tverts = turning_vertices_from_edges(xT, yT, edges_back; angle_thresh_deg=30.0)
+            @info "Graph-turns" n_turns = length(tverts)
+
+            # A) Segment length: smooth density
+            seg_lengths, plt_len = plot_segment_length_density(
+                xT, yT, feat.segments;
+                save_path = (save_path === nothing ? nothing : replace(save_path, ".png" => "_seglen_density.png"))
+            )
+
+            # D) Turning angles: smooth density (graph-based)
+            _, dev_deg_all = graph_turn_deviation_deg(xT, yT, edges_back)
+            plt_ta = plot_turning_angle_density(dev_deg_all;
+                save_path = (save_path === nothing ? nothing : replace(save_path, ".png" => "_turning_angles_density.png"))
+            )
+
+            ###############
+            # (B) Segment curvature stats (per segment)
+            ###############
+            curv_stats = [ segment_curvature_stats(xT, yT, seg) for seg in feat.segments ]
+            totals  = getindex.(curv_stats, 1)
+            means   = getindex.(curv_stats, 2)
+            dens    = getindex.(curv_stats, 3)
+
+            plt_curv_total = histogram(totals; bins=30, xlabel="total |turn| (rad)", ylabel="freq",
+                                    title="Per-segment total curvature", legend=false)
+            plt_curv_mean  = histogram(means;  bins=30, xlabel="mean |turn| per interior (rad)", ylabel="freq",
+                                    title="Per-segment mean curvature", legend=false)
+            plt_curv_dens  = histogram(dens;   bins=30, xlabel="curvature density (rad / unit length)", ylabel="freq",
+                                    title="Per-segment curvature density", legend=false)
+
+            if save_path !== nothing
+                savefig(plt_curv_total, replace(save_path, ".png" => "_curv_total_hist.png"))
+                savefig(plt_curv_mean,  replace(save_path, ".png" => "_curv_mean_hist.png"))
+                savefig(plt_curv_dens,  replace(save_path, ".png" => "_curv_density_hist.png"))
+            end
+
+            ###############
+            # (C) Junction and leaf vertices
+            ###############
+            deg = degree_map(edges_back)
+            leaf_vertices    = [v for (v,d) in deg if d == 1]
+            junction_vertices = [v for (v,d) in deg if d ≥ 3]
+            @info "Graph degrees" n_leaf=length(leaf_vertices) n_junction=length(junction_vertices)
+
+            # Optional: branching (degree) frequency at junctions
+            branching_counts = [deg[v] for v in junction_vertices]
+            if !isempty(branching_counts)
+                m = maximum(branching_counts)
+                plt_branches = histogram(branching_counts; bins=1:1:m+1,
+                    xticks=(1:m, string.(1:m)),
+                    xlabel="degree at junction", ylabel="freq", title="Junction branching degree", legend=false)
+                if save_path !== nothing
+                    savefig(plt_branches, replace(save_path, ".png" => "_junction_branching_hist.png"))
+                end
+            end
+
+
+            # 2) overlay: PASS turning_vertices directly (so they’re always shown)
+            overlay_segments_vertices!(
+                plt_backbone, xT, yT,
+                (; segments = feat.segments,
+                endpoints = feat.endpoints,
+                junctions = feat.junctions);
+                segment_mode = :cmap,
+                v_ms = 8,
+                turning_vertices = tverts,       # <— NEW: wire them in
+                turning_color = :orange,
+                turning_ms = 4,
+                turning_marker = :square
+            )
+            
+
             if save_path !== nothing
                 savefig(plt_backbone, replace(save_path, ".png" => "_backbone.png"))
             end
         end
+
+
+
+
+        ## TODO: this is imageJ backbone plotter.
+        # plt_backbone = plot(; 
+        #     size = (800, 800),
+        #     aspect_ratio = :equal,
+        #     legend = false,
+        #     xlim = xlim,
+        #     ylim = ylim,
+        #     axis = false,          # remove axis ticks/labels
+        #     framestyle = :none,    # remove frame
+        #     background_color = :black  # black background
+        # )
+
+        # if r_plot_unit !== nothing
+        #     _draw_contacts_grid!(plt_backbone, xT, yT, r_plot_unit;
+        #         xlim = xlim,
+        #         ylim = ylim,
+        #         contact_scale = contact_scale,
+        #         max_lines = contact_max_lines,
+        #         lw = 2,
+        #         color = :white   # backbone in white
+        #     )
+        #     if save_path !== nothing
+        #         savefig(plt_backbone, replace(save_path, ".png" => "_backbone.png"))
+        #     end
+        # end
+
 
         # compass legend
         begin
@@ -683,13 +991,15 @@ function plot_monomers_lod(
             end
         end
 
-        # TM markers (unchanged)
-        if show_orientation && rotation !== nothing && !isempty(rotation)
+        # TM markers (skip if tm_style says "none")
+        tstyle = Symbol(tm_style)
+        if show_orientation && rotation !== nothing && !isempty(rotation) &&
+        !(tstyle in (:nothing, :none))
             maxidx = maximum(collect(idx))
             if length(rotation) ≥ maxidx
                 vis_ids = collect(idx)
                 if r_plot_unit !== nothing
-                    style = tm_style == :auto ? (show_contour ? :arcs : :ticks) : Symbol(tm_style)
+                    style = tstyle == :auto ? (show_contour ? :arcs : :ticks) : tstyle
                     if style == :arcs
                         add_orientation_arcs!(plt, xT, yT, rotation, r_plot_unit;
                                               indices=vis_ids, every=oe,
@@ -733,21 +1043,6 @@ function plot_monomers_lod(
                             lw=0.5, alpha=0.8, linecolor=:black, label=false)
                 end
             end
-        end
-
-        # >>> NEW: curvature-colored backbone overlay <<<
-        if backbone_overlay != :none && r_plot_unit !== nothing && bb_edges !== nothing
-            ϵ = overlay_simplify === :auto ? r_plot_unit : (overlay_simplify === nothing ? nothing : Float64(overlay_simplify))
-            Δ = overlay_resample === :auto ? r_plot_unit : (overlay_resample === nothing ? nothing : Float64(overlay_resample))
-            overlay_backbone_curvature!(
-                plt, xT, yT, bb_edges;
-                comp_id=:all,
-                simplify_eps=ϵ,
-                resample_ds=Δ,
-                corner_angle_deg=overlay_corner_angle_deg,
-                lw=overlay_lw,
-                alpha=overlay_alpha
-            )
         end
     end
 
@@ -885,11 +1180,6 @@ function generate_plots(state::AbstractState, config;
         tm_inset_frac=tm_inset_frac,
         tm_lw=tm_lw,
         tm_size_frac=tm_size_frac,
-        backbone_overlay = :curvature,           # turn it on
-        overlay_corner_angle_deg = 25.0,         # tweak if needed
-        overlay_simplify = :auto,                # uses r_plot_unit
-        overlay_resample = :auto                 # uses r_plot_unit
-
     )
 
     println("Saved:\n  ", monomer_path)
@@ -913,718 +1203,10 @@ end
 # -- helpers: geometry --
 hyp2(dx,dy) = sqrt(dx*dx + dy*dy)
 
-# Build adjacency and degrees on backbone nodes
-function _build_adj(N::Int, edges::Vector{Tuple{Int,Int}})
-    adj = [Int[] for _ in 1:N]
-    for (i,j) in edges
-        push!(adj[i], j); push!(adj[j], i)
-    end
-    return adj, [length(adj[i]) for i in 1:N]
-end
-
-# Connected components (ignore isolated nodes with deg=0)
-function _components(adj)
-    N = length(adj)
-    seen = falses(N)
-    comps = Vector{Vector{Int}}()
-    for s in 1:N
-        if !seen[s] && !isempty(adj[s])
-            st = [s]; seen[s] = true; comp = Int[]
-            while !isempty(st)
-                v = pop!(st); push!(comp, v)
-                for u in adj[v]
-                    if !seen[u]
-                        seen[u] = true; push!(st, u)
-                    end
-                end
-            end
-            push!(comps, comp)
-        end
-    end
-    return comps
-end
-
-# Extract polylines by walking “degree-2 corridors” between terminals (deg != 2)
-# Returns: Vector of polylines, each as a Vector{Int} node indices in order
-function extract_polylines(N::Int, edges::Vector{Tuple{Int,Int}})
-    adj, deg = _build_adj(N, edges)
-    comps = _components(adj)
-    visited_edge = Set{Tuple{Int,Int}}()
-    polylines = Vector{Vector{Int}}()
-
-    follow_chain = function(u::Int, v::Int)
-        path = [u, v]; prev, cur = u, v
-        while length(adj[cur]) == 2
-            nxt = adj[cur][1] == prev ? adj[cur][2] : adj[cur][1]
-            push!(path, nxt); prev, cur = cur, nxt
-        end
-        return path
-    end
-
-    for comp in comps
-        # terminals: degree != 2 within this component
-        terms = [v for v in comp if deg[v] != 2]
-        # corridor walks starting at terminals
-        for u in terms
-            for v in adj[u]
-                if !((u,v) in visited_edge || (v,u) in visited_edge)
-                    path = follow_chain(u, v)
-                    for k in 1:length(path)-1
-                        push!(visited_edge, (path[k], path[k+1]))
-                        push!(visited_edge, (path[k+1], path[k]))
-                    end
-                    push!(polylines, path)
-                end
-            end
-        end
-        # rare cycle fallback: if no terminals (all deg=2), walk once around
-        if isempty(terms)
-            v0 = first(comp); v1 = adj[v0][1]
-            cyc = follow_chain(v0, v1)
-            push!(polylines, cyc)
-        end
-    end
-    return polylines
-end
-
-# Douglas–Peucker simplification on coordinates
-function simplify_polyline(xs::Vector{Float64}, ys::Vector{Float64}, ε::Float64)
-    n = length(xs)
-    keep = falses(n); keep[1] = true; keep[n] = true
-    stack = [(1,n)]
-    while !isempty(stack)
-        i,j = pop!(stack)
-        xi, yi = xs[i], ys[i]; xj, yj = xs[j], ys[j]
-        dx, dy = xj - xi, yj - yi; denom = hypot(dx,dy)
-        maxd, idx = -1.0, -1
-        for k in i+1:j-1
-            # point-line distance
-            num = abs(dy*xs[k] - dx*ys[k] + xj*yi - xi*yj)
-            d = denom == 0 ? hypot(xs[k]-xi, ys[k]-yi) : num/denom
-            if d > maxd; maxd = d; idx = k; end
-        end
-        if maxd > ε && idx > 0
-            keep[idx] = true
-            push!(stack, (i,idx)); push!(stack, (idx,j))
-        else
-            keep[i] = true; keep[j] = true
-        end
-    end
-    return xs[keep], ys[keep]
-end
-
-# Equal-arclength resampling (chord-length parameterization)
-function resample_polyline(xs::Vector{Float64}, ys::Vector{Float64}, Δs::Float64)
-    n = length(xs)
-    if n ≤ 2 || Δs ≤ 0; return xs, ys; end
-    s = zeros(Float64, n);  # cumulative
-    for k in 2:n
-        s[k] = s[k-1] + hyp2(xs[k]-xs[k-1], ys[k]-ys[k-1])
-    end
-    L = s[end]; if L == 0; return [xs[1], xs[end]], [ys[1], ys[end]]; end
-    outN = max(2, Int(floor(L/Δs))+1)
-    sout = range(0, L; length=outN)
-    xout = similar(sout, Float64); yout = similar(sout, Float64)
-    j = 1
-    for (i, si) in enumerate(sout)
-        while j < n && s[j+1] < si; j += 1; end
-        if j == n
-            xout[i] = xs[end]; yout[i] = ys[end]
-        else
-            t = (si - s[j]) / max(s[j+1]-s[j], eps())
-            xout[i] = (1-t)*xs[j] + t*xs[j+1]
-            yout[i] = (1-t)*ys[j] + t*ys[j+1]
-        end
-    end
-    return collect(xout), collect(yout)
-end
-
-# Turning angles (in radians) at interior vertices
-function turning_angles(xs::Vector{Float64}, ys::Vector{Float64})
-    n = length(xs); if n < 3; return Float64[]; end
-    thetas = Float64[]
-    for k in 2:n-1
-        ax, ay = xs[k]-xs[k-1], ys[k]-ys[k-1]
-        bx, by = xs[k+1]-xs[k], ys[k+1]-ys[k]
-        na = hypot(ax,ay); nb = hypot(bx,by)
-        if na == 0 || nb == 0
-            push!(thetas, 0.0)
-            continue
-        end
-        cosang = clamp((ax*bx + ay*by)/(na*nb), -1.0, 1.0)
-        θ = acos(cosang)
-        # signed via cross product (optional): sign = sign(ax*by - ay*bx)
-        push!(thetas, θ)
-    end
-    return thetas
-end
-
-# Core per-strand metrics + corner detection
-struct StrandMetrics
-    strand_id::Int
-    comp_id::Int
-    n_pts::Int
-    L::Float64
-    D::Float64
-    tortuosity::Float64
-    total_abs_turn_rad::Float64
-    curv_density_rad_per_unit::Float64
-    mean_abs_turn_rad::Float64
-    max_abs_turn_rad::Float64
-    corner_count::Int
-    corner_density_per_unit::Float64
-    corner_s_positions::Vector{Float64}
-end
-
-function analyze_strand(xs::Vector{Float64}, ys::Vector{Float64};
-                        strand_id::Int, comp_id::Int,
-                        corner_angle_deg::Float64=25.0)
-    n = length(xs)
-    # arc length + cumulative
-    s = zeros(Float64, n)
-    for k in 2:n; s[k] = s[k-1] + hyp2(xs[k]-xs[k-1], ys[k]-ys[k-1]); end
-    L = s[end]
-    D = hyp2(xs[end]-xs[1], ys[end]-ys[1])
-    τ = L > 0 ? L / max(D, eps()) : 1.0
-
-    θs = turning_angles(xs, ys)
-    absθ = abs.(θs)
-    total_abs = sum(absθ)
-    curv_density = L > 0 ? total_abs / L : 0.0
-    mean_abs = isempty(absθ) ? 0.0 : mean(absθ)
-    max_abs = isempty(absθ) ? 0.0 : maximum(absθ)
-
-    # corner detection: angle threshold + local maxima
-    thr = deg2rad(corner_angle_deg)
-    corners = Int[]
-    for k in 1:length(absθ)
-        is_peak = (k == 1 || absθ[k] ≥ absθ[k-1]) && (k == length(absθ) || absθ[k] ≥ absθ[k+1])
-        if absθ[k] ≥ thr && is_peak
-            push!(corners, k+1)  # interior angle at vertex k+1
-        end
-    end
-    corner_s = [s[i] for i in corners]
-    ccount = length(corners)
-    cdens = L > 0 ? ccount / L : 0.0
-
-    return StrandMetrics(strand_id, comp_id, n, L, D, τ, total_abs, curv_density, mean_abs, max_abs, ccount, cdens, corner_s)
-end
-
-# Orchestrator: from backbone edges + (x,y) → polylines → [simplify] → [resample] → metrics
-function analyze_backbone_polylines(x::AbstractVector{<:Real}, y::AbstractVector{<:Real},
-                                    edges::Vector{Tuple{Int,Int}};
-                                    r_plot_unit::Union{Nothing,Real}=nothing,
-                                    simplify_eps::Union{Nothing,Real}=nothing,
-                                    resample_ds::Union{Nothing,Real}=nothing,
-                                    corner_angle_deg::Float64=25.0)
-    N = length(x)
-    polys = extract_polylines(N, edges)
-
-    # map node index → component id
-    adj, _ = _build_adj(N, edges)
-    comps = _components(adj)
-    node2comp = fill(0, N)
-    for (cid, comp) in enumerate(comps)
-        for v in comp; node2comp[v] = cid; end
-    end
-
-    # Prepare outputs
-    strands = StrandMetrics[]
-    # (Optional) component aggregates
-    comp_lengths = Dict{Int,Float64}()
-
-    for (sid, path) in enumerate(polys)
-        xs = Float64[x[i] for i in path]
-        ys = Float64[y[i] for i in path]
-        cid = node2comp[path[1]]
-
-        # optional simplify
-        if simplify_eps !== nothing
-            xs, ys = simplify_polyline(xs, ys, Float64(simplify_eps))
-        end
-        # optional resample
-        if resample_ds !== nothing
-            xs, ys = resample_polyline(xs, ys, Float64(resample_ds))
-        end
-
-        sm = analyze_strand(xs, ys; strand_id=sid, comp_id=cid, corner_angle_deg=corner_angle_deg)
-        push!(strands, sm)
-        comp_lengths[cid] = get(comp_lengths, cid, 0.0) + sm.L
-    end
-
-    # component summary table (simple but useful)
-    comp_summary = Dict{Int,Dict{Symbol,Any}}()
-    for (cid, _) in comp_lengths
-        s_in = filter(sm->sm.comp_id==cid, strands)
-        len_vals = [sm.L for sm in s_in]
-        τ_vals   = [sm.tortuosity for sm in s_in]
-        curvD    = [sm.curv_density_rad_per_unit for sm in s_in]
-        comp_summary[cid] = Dict(
-            :n_strands => length(s_in),
-            :total_length => sum(len_vals),
-            :longest_strand => maximum(len_vals),
-            :median_strand => length(len_vals)>0 ? median(len_vals) : 0.0,
-            :mean_tau => length(τ_vals)>0 ? mean(τ_vals) : 1.0,
-            :sd_tau   => length(τ_vals)>1 ? std(τ_vals) : 0.0,
-            :median_curv_density => length(curvD)>0 ? median(curvD) : 0.0,
-            :mean_corners_per_unit => mean([sm.corner_density_per_unit for sm in s_in]),
-        )
-    end
-
-    return strands, comp_summary
-end
-
-# (Optional) tiny overlay to inspect one component’s polylines colored by |turn angle|
-# (Hook this into your plotting pipeline later if/when you want visuals.)
-# using Plots
-function preview_component!(plt, x, y, edges; comp_id=1, simplify_eps=nothing, resample_ds=nothing)
-    N = length(x); polys = extract_polylines(N, edges)
-    adj,_ = _build_adj(N, edges); comps = _components(adj)
-    node2comp = fill(0, N); for (cid,comp) in enumerate(comps); for v in comp; node2comp[v]=cid; end; end
-    for path in polys
-        cid = node2comp[path[1]]
-        cid == comp_id || continue
-        xs = Float64[x[i] for i in path]; ys = Float64[y[i] for i in path]
-        if simplify_eps !== nothing; xs,ys = simplify_polyline(xs,ys,simplify_eps); end
-        if resample_ds !== nothing; xs,ys = resample_polyline(xs,ys,resample_ds); end
-        plot!(plt, xs, ys; seriestype=:path, color=:black, alpha=0.8, lw=2)
-    end
-end
-
-
-############################
-# --- helpers for overlay ---
-############################
-# Build adjacency and degrees on backbone nodes
-function _build_adj(N::Int, edges::Vector{Tuple{Int,Int}})
-    adj = [Int[] for _ in 1:N]
-    for (i,j) in edges
-        push!(adj[i], j); push!(adj[j], i)
-    end
-    return adj, [length(adj[i]) for i in 1:N]
-end
-
-# Connected components (ignore isolated nodes with deg=0)
-function _components(adj::Vector{Vector{Int}})
-    N = length(adj)
-    seen = falses(N)
-    comps = Vector{Vector{Int}}()
-    for s in 1:N
-        if !seen[s] && !isempty(adj[s])
-            st = [s]; seen[s] = true; comp = Int[]
-            while !isempty(st)
-                v = pop!(st); push!(comp, v)
-                for u in adj[v]
-                    if !seen[u]
-                        seen[u] = true; push!(st, u)
-                    end
-                end
-            end
-            push!(comps, comp)
-        end
-    end
-    return comps
-end
-
-# Extract polylines by walking degree-2 corridors between terminals (deg != 2)
-function extract_polylines(N::Int, edges::Vector{Tuple{Int,Int}})
-    adj, deg = _build_adj(N, edges)
-    comps = _components(adj)
-    visited_edge = Set{Tuple{Int,Int}}()
-    polylines = Vector{Vector{Int}}()
-
-    follow_chain = function(u::Int, v::Int)
-        path = [u, v]; prev, cur = u, v
-        while length(adj[cur]) == 2
-            nxt = adj[cur][1] == prev ? adj[cur][2] : adj[cur][1]
-            push!(path, nxt); prev, cur = cur, nxt
-        end
-        return path
-    end
-
-    for comp in comps
-        terms = [v for v in comp if deg[v] != 2]
-        for u in terms
-            for v in adj[u]
-                if !((u,v) in visited_edge || (v,u) in visited_edge)
-                    path = follow_chain(u, v)
-                    for k in 1:length(path)-1
-                        push!(visited_edge, (path[k], path[k+1]))
-                        push!(visited_edge, (path[k+1], path[k]))
-                    end
-                    push!(polylines, path)
-                end
-            end
-        end
-        if isempty(terms) && !isempty(comp)  # rare cycles
-            v0 = first(comp); v1 = adj[v0][1]
-            push!(polylines, follow_chain(v0, v1))
-        end
-    end
-    return polylines
-end
-
-# Turning angles (radians) at interior vertices of a polyline
-function turning_angles(xs::Vector{Float64}, ys::Vector{Float64})
-    n = length(xs); if n < 3; return Float64[]; end
-    thetas = Float64[]
-    for k in 2:n-1
-        ax, ay = xs[k]-xs[k-1], ys[k]-ys[k-1]
-        bx, by = xs[k+1]-xs[k], ys[k+1]-ys[k]
-        na = hypot(ax,ay); nb = hypot(bx,by)
-        if na == 0 || nb == 0
-            push!(thetas, 0.0); continue
-        end
-        cosang = clamp((ax*bx + ay*by)/(na*nb), -1.0, 1.0)
-        push!(thetas, acos(cosang))   # unsigned; use sign via cross if needed
-    end
-    return thetas
-end
-
-# (re)use your simplify/resample if you already added them; otherwise light no-ops:
-if !@isdefined simplify_polyline
-    simplify_polyline(xs::Vector{Float64}, ys::Vector{Float64}, ε::Float64) = (xs, ys)
-end
-if !@isdefined resample_polyline
-    resample_polyline(xs::Vector{Float64}, ys::Vector{Float64}, Δs::Float64) = (xs, ys)
-end
-
-# map interior angles to per-segment values for coloring
-function _segment_turn_values(xs::Vector{Float64}, ys::Vector{Float64})
-    n = length(xs)
-    if n < 3
-        return Float64[], Float64[]
-    end
-    θ = turning_angles(xs, ys)          # length n-2, at vertices 2..n-1
-    absθ = abs.(θ)
-    segv = Vector{Float64}(undef, n-1)
-    segv[1] = absθ[1]
-    for k in 2:n-2
-        segv[k] = absθ[k-1]
-    end
-    segv[n-1] = absθ[end]
-    return absθ, segv
-end
-
-# corner picker: threshold + local max in absθ (angles live at vertices 2..n-1)
-function _corner_indices_from_absθ(absθ::Vector{Float64}, thr_rad::Float64)
-    corners = Int[]
-    m = length(absθ)
-    for i in 1:m
-        is_peak = (i == 1 || absθ[i] ≥ absθ[i-1]) && (i == m || absθ[i] ≥ absθ[i+1])
-        if absθ[i] ≥ thr_rad && is_peak
-            push!(corners, i + 1)  # map to vertex index
-        end
-    end
-    return corners
-end
-
-# Curvature-colored overlay with corner markers
-function overlay_backbone_curvature!(
-    plt,
-    x::AbstractVector{<:Real}, y::AbstractVector{<:Real},
-    edges::Vector{Tuple{Int,Int}};
-    comp_id::Union{Int,Symbol} = :all,
-    simplify_eps::Union{Nothing,Real} = nothing,
-    resample_ds::Union{Nothing,Real} = nothing,
-    corner_angle_deg::Real = 25.0,
-    # visuals
-    cmap_name = :viridis,
-    lw::Real = 3.0,
-    alpha::Real = 0.95,
-    corner_marker = :xcross,
-    corner_ms_min::Real = 4.0,
-    corner_ms_max::Real = 12.0,
-    corner_color = :red,
-    show_colorbar::Bool = true,
-    show_component_labels::Bool = true,
-    component_label_fontsize::Int = 9,
-)
-    N = length(x)
-    polys = extract_polylines(N, edges)
-
-    # build components + map node -> component id
-    adj, _ = _build_adj(N, edges)
-    comps = _components(adj)
-    node2comp = fill(0, N)
-    for (cid, comp) in enumerate(comps), v in comp
-        node2comp[v] = cid
-    end
-
-    # pass 1: prepare polylines and collect segment curvature (in degrees)
-    all_seg_vals_deg = Float64[]
-    # cache entries: (comp_id, xs, ys, absθ_deg, segv_deg)
-    cache = Vector{Tuple{Int,Vector{Float64},Vector{Float64},Vector{Float64},Vector{Float64}}}()
-    for path in polys
-        cid = node2comp[path[1]]
-        if comp_id !== :all && cid != comp_id
-            continue
-        end
-
-        xs = Float64[x[i] for i in path]
-        ys = Float64[y[i] for i in path]
-        if simplify_eps !== nothing
-            xs, ys = simplify_polyline(xs, ys, Float64(simplify_eps))
-        end
-        if resample_ds !== nothing
-            xs, ys = resample_polyline(xs, ys, Float64(resample_ds))
-        end
-
-        absθ_rad, segv_rad = _segment_turn_values(xs, ys)   # both in radians
-        absθ_deg = rad2deg.(absθ_rad)
-        segv_deg = rad2deg.(segv_rad)
-
-        push!(cache, (cid, xs, ys, absθ_deg, segv_deg))
-        append!(all_seg_vals_deg, segv_deg)
-    end
-
-    # color scale based on curvature in degrees
-    vmin_deg, vmax_deg = isempty(all_seg_vals_deg) ? (0.0, 0.0) : extrema(all_seg_vals_deg)
-    Δ = max(vmax_deg - vmin_deg, eps())
-    cmap = cgrad(cmap_name)
-
-    # pass 2: draw colored segments + corner markers
-    thr_deg = corner_angle_deg
-    for (_, xs, ys, absθ_deg, segv_deg) in cache
-        Lseg = length(segv_deg) # number of edges in the polyline
-        for k in 1:Lseg
-            v = (segv_deg[k] - vmin_deg) / Δ
-            col = cmap[clamp(v, 0.0, 1.0)]
-            plot!(plt, xs[k:k+1], ys[k:k+1];
-                  seriestype = :path, color = col, lw = lw, alpha = alpha, label = false)
-        end
-
-        # corner markers (vertex-based). absθ_deg has length = n_points - 2
-        if !isempty(absθ_deg)
-            # IMPORTANT: _corner_indices_from_absθ expects radians -> convert
-            corner_idx = _detect_corners_multiscale(xs, ys,
-                                        deg2rad.(segv_deg),  # we have deg; convert back to rad
-                                        deg2rad.(absθ_deg);
-                                        thr_deg = corner_angle_deg,
-                                        win = 5,
-                                        min_sep_pts = 3,
-                                        min_arc_sep = 0.75 * mean(diff(xs)))
-            for vidx in corner_idx
-                # interior vertex at 2..length(xs)-1 maps to absθ index (vidx-1)
-                aidx = vidx - 1
-                aidx < 1 && continue
-                aidx > length(absθ_deg) && continue
-                frac = clamp(absθ_deg[aidx] / 180.0, 0.0, 1.0)
-                msz = corner_ms_min + (corner_ms_max - corner_ms_min) * frac
-                scatter!(plt, [xs[vidx]], [ys[vidx]];
-                         marker = corner_marker, ms = msz, color = corner_color,
-                         alpha = 1.0, label = false)
-            end
-        end
-    end
-
-    # optional colorbar: use a 1x2 transparent heatmap to carry the scale
-    if show_colorbar
-        dummy = [vmin_deg vmin_deg; vmax_deg vmax_deg]
-        heatmap!(plt, [0, 1], [0, 1], dummy;
-                 alpha = 0.0, color = cmap, clims = (vmin_deg, vmax_deg),
-                 colorbar = true, label = false)
-    end
-
-    # optional component labels at centroids
-    if show_component_labels
-        sel = comp_id === :all ? (1:length(comps)) : (comp_id:comp_id)
-        for cid in sel
-            comp = comps[cid]
-            isempty(comp) && continue
-            cx = mean(@view x[comp]); cy = mean(@view y[comp])
-            annotate!(plt, cx, cy, text("C$cid", component_label_fontsize, :black))
-        end
-    end
-
-    return plt
-end
 
 ############################
 # Standalone backbone overlay saver
 ############################
-using Plots
-
-function save_backbone_overlay(
-    state;
-    # file
-    save_path::AbstractString,
-    figsize::Tuple{Int,Int}=(1200,1200),
-    dpi::Int=200,
-    # geometry / units (match plot_monomers_lod defaults)
-    mode::Symbol=:min, scale::Union{Symbol,Real}=:identity, target_max=nothing,
-    real_scale_nm::Real = NM_PER_DATA,
-    unit::Union{Symbol,String} = :auto,
-    # backbone + overlay knobs
-    contact_scale::Real = 1.02,
-    overlay_corner_angle_deg::Real = 25.0,
-    overlay_simplify::Union{Nothing,Real,Symbol} = :auto,  # :auto uses r_plot_unit
-    overlay_resample::Union{Nothing,Real,Symbol} = :auto,  # :auto uses r_plot_unit
-    overlay_lw::Real = 4.0,
-    overlay_alpha::Real = 1.0,
-)
-    x = state.x_coords
-    y = state.y_coords
-    monomer_radius = state.radius
-
-    isempty(x) && isempty(y) && error("No coordinates in state")
-
-    # --- transform + units (same as plot_monomers_lod) ---
-    xT0, yT0, s = transform_coords(x, y; mode=mode, scale=scale, target_max=target_max)
-    x_nm = xT0 .* real_scale_nm
-    y_nm = yT0 .* real_scale_nm
-    r_nm = monomer_radius === nothing ? nothing : Float64(monomer_radius) * s * real_scale_nm
-
-    spanx_nm = maximum(x_nm) - minimum(x_nm)
-    spany_nm = maximum(y_nm) - minimum(y_nm)
-    span_nm  = max(spanx_nm, spany_nm)
-    u   = unit === :auto ? pick_unit(span_nm) : Symbol(unit)
-    div = unit_divisor(u)
-
-    xT = x_nm ./ div
-    yT = y_nm ./ div
-    r_plot_unit = r_nm === nothing ? nothing : r_nm / div
-
-    # --- limits with a little padding (like the main plot) ---
-    spanx = maximum(xT) - minimum(xT)
-    spany = maximum(yT) - minimum(yT)
-    pad = r_plot_unit !== nothing ? 1.15 * r_plot_unit : 0.02 * max(spanx, spany)
-    xlim = (minimum(xT) - pad, maximum(xT) + pad)
-    ylim = (minimum(yT) - pad, maximum(yT) + pad)
-
-    # --- compute backbone on transformed coords ---
-    r_plot_unit === nothing && error("state.radius must be set for backbone overlay")
-    bb_edges = backbone_edges_mst(xT, yT, r_plot_unit; xlim=xlim, ylim=ylim, contact_scale=contact_scale)
-
-    # --- make a clean figure and draw only the curvature overlay ---
-    plt = plot(; size=figsize, dpi=dpi, aspect_ratio=:equal, legend=false,
-                xlim=xlim, ylim=ylim, background_color=:white)
-
-    ϵ = overlay_simplify === :auto ? r_plot_unit : (overlay_simplify === nothing ? nothing : Float64(overlay_simplify))
-    Δ = overlay_resample === :auto ? r_plot_unit : (overlay_resample === nothing ? nothing : Float64(overlay_resample))
-
-    overlay_backbone_curvature!(
-        plt, xT, yT, bb_edges;
-        comp_id=:all,
-        simplify_eps=.1,
-        resample_ds=.3,
-        corner_angle_deg=25,
-        lw=4,
-        alpha=overlay_alpha,
-        show_colorbar = true,
-        show_component_labels = false   # suppress C1, C2, ...
-           
-    )
-
-    xlabel!(plt, "Distance ($(unit_label(u)))")
-    ylabel!(plt, "Distance ($(unit_label(u)))")
-
-    # save
-    mkpath(dirname(save_path))
-    savefig(plt, save_path)
-    println("Saved backbone overlay → $save_path")
-    return plt
-end
-
-
-"""
-Robust corner detection on a resampled polyline.
-
-Inputs:
-- xs, ys: resampled polyline (length M)
-- seg_turn_rad: per-segment turning (length M-1), from `_segment_turn_values`
-- absθ_rad: per-vertex absolute interior angles (length M-2), from `_segment_turn_values`
-- thr_deg: primary threshold on *smoothed* turning angle (degrees)
-- win: smoothing window (odd, >=3) for moving average on segment turns
-- min_sep_pts: non-maximum suppression window (corners must be >= this many points apart)
-- min_arc_sep: minimum arc-length separation between accepted corners (in plot units)
-
-Returns:
-- corner vertex indices in the polyline indexing (2..M-1)
-"""
-function _detect_corners_multiscale(xs::Vector{Float64}, ys::Vector{Float64},
-                                    seg_turn_rad::Vector{Float64},
-                                    absθ_rad::Vector{Float64};
-                                    thr_deg::Real = 25.0,
-                                    win::Int = 5,
-                                    min_sep_pts::Int = 3,
-                                    min_arc_sep::Real = 0.75)
-
-    M = length(xs)
-    if M < 3
-        return Int[]
-    end
-
-    # 1) Smooth per-segment turning (Savitzky would be nicer; MA is fine & fast)
-    L = length(seg_turn_rad)
-    w = max(3, isodd(win) ? win : win + 1)
-    half = (w - 1) ÷ 2
-    pad = [seg_turn_rad[1:half]; seg_turn_rad; seg_turn_rad[end-half+1:end]]
-    sm = similar(seg_turn_rad)
-    for i in 1:L
-        sm[i] = mean(@view pad[i:i+w-1])
-    end
-
-    # 2) Threshold on smoothed segment turning (in degrees)
-    sm_deg = rad2deg.(sm)
-    mask = sm_deg .>= thr_deg
-
-    # 3) Non-maximum suppression on the mask
-    #    Keep local peaks; discard neighbors within +/- min_sep_pts if smaller
-    peaks = falses(L)
-    i = 1
-    while i <= L
-        if !mask[i]
-            i += 1
-            continue
-        end
-        # look at a local group of consecutive "true" positions
-        j = i
-        while j <= L && mask[j]
-            j += 1
-        end
-        # in [i, j-1], pick the index with max smoothed value
-        seg_slice = sm_deg[i:j-1]
-        rel_max = argmax(seg_slice)
-        k = i + rel_max - 1
-        peaks[k] = true
-        i = j
-    end
-
-    # spread-based NMS: remove peaks closer than min_sep_pts (by index)
-    peak_idx = findall(peaks)
-    filtered = Int[]
-    last_keep = -10^9
-    for p in peak_idx
-        if p - last_keep >= min_sep_pts
-            push!(filtered, p)
-            last_keep = p
-        end
-    end
-
-    # 4) Map per-segment peak (k in 1..M-1) to a *vertex* index in 2..M-1
-    #    A corner lives at vertex v ~ k+1 (since segment k goes v..v+1)
-    cand_vertices = clamp.(filtered .+ 1, 2, M-1)
-
-    # 5) Enforce minimum arc-length separation in actual distance
-    # precompute cumulative arclength
-    s = zeros(Float64, M)
-    for t in 2:M
-        s[t] = s[t-1] + hypot(xs[t]-xs[t-1], ys[t]-ys[t-1])
-    end
-
-    kept = Int[]
-    last_s = -1e18
-    for v in cand_vertices
-        if (s[v] - last_s) >= min_arc_sep
-            push!(kept, v)
-            last_s = s[v]
-        end
-    end
-
-    return kept
-end
-
 
 
 # If you want to run directly, add your loader here:
