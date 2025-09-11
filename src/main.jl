@@ -11,6 +11,8 @@ include("initialization.jl")
 include("simulation.jl")
 include("utils.jl")
 include("plot_results.jl")
+include("structure_analysis.jl")
+
 
 
 """
@@ -55,16 +57,18 @@ function main()
     # Save results or generate plots
     return state
 end
+safe_stamp() = Dates.format(now(), "yyyymmdd-HHMMSS-sss")
+stamp = safe_stamp()
 
-# state = main()
+state = main()
 # print(length(state.x_coords))
-# out_dir = joinpath(pwd(), "plots", "tmp")
-# mkpath(out_dir)
+out_dir = joinpath(pwd(), "plots", "tmp")
+mkpath(out_dir)
 
-# name_noext, _ = splitext(basename(config.file_path))
-# prefix = joinpath(out_dir, name_noext*"_123")
-# overlay_path = prefix * "overlay_curvature.png"
-# generate_plots(state, config; output_prefix = prefix*"arcs", show_contour=true, tm_style=:nothing)
+name_noext, _ = splitext(basename(config.file_path))
+prefix = joinpath(out_dir, name_noext*"_123")
+overlay_path = prefix * "overlay_curvature.png"
+generate_plots(state, config; output_prefix = prefix*"arcs_$(stamp)", show_contour=true, tm_style=:nothing)
 
 
 
