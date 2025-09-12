@@ -40,11 +40,11 @@ config = Config(
     nn_restriction=3,
     box_capacity=16,
     monomer_radius=1,
-    grid_size=80,
-    max_monomers=500,
+    grid_size=200,
+    max_monomers=8000,
     # max_monomers=100,
     # file_path=ARGS[1],
-    file_path="Claudins/c2_WT.txt",
+    file_path="Claudins/c2_2mut.txt",
     grid_overlay = false,
     prog = 1
 )
@@ -57,10 +57,21 @@ function main()
     # Save results or generate plots
     return state
 end
+
+
+
 safe_stamp() = Dates.format(now(), "yyyymmdd-HHMMSS-sss")
 stamp = safe_stamp()
 
 state = main()
+
+
+ms = create_minimal_state(state)
+ms.edges
+state.edges
+ms.junctions
+ms.endpoints
+
 # print(length(state.x_coords))
 out_dir = joinpath(pwd(), "plots", "tmp")
 mkpath(out_dir)

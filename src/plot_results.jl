@@ -134,6 +134,34 @@ function overlay_segments_vertices!(plt,
     return plt
 end
 
+"""
+Compare brute-force edges (from find_contact_edges) with direct edges (state.edges).
+Prints counts and mismatches.
+"""
+function compare_edges(state, edges_bruteforce::Vector{Tuple{Int,Int}})
+    # normalize to undirected, no self-loops
+    norm(edges) = Set([(min(u,v), max(u,v)) for (u,v) in edges if u != v])
+
+    E_brute  = norm(edges_bruteforce)
+    E_direct = norm(state.edges)
+
+    missing_in_direct = setdiff(E_brute, E_direct)
+    extra_in_direct   = setdiff(E_direct, E_brute)
+
+    println("Brute-force edges: ", length(E_brute))
+    println("Direct edges:      ", length(E_direct))
+    println("Missing in direct: ", length(missing_in_direct))
+    println("Extra in direct:   ", length(extra_in_direct))
+    for (u,v) in Iterators.take(missing_in_direct, 5)
+        dx = state.x_coords[u] - state.x_coords[v]
+        dy = state.y_coords[u] - state.y_coords[v]
+        d  = hypot(dx,dy)
+        println((u,v), "  d=", d, "  2r=", 2*state.radius, "  2r*1.02=", 2*state.radius*CONTACT_SCALE)
+    end
+
+    return (; E_brute, E_direct, missing_in_direct, extra_in_direct)
+end
+
 
 function _draw_contacts_grid!(plt, x::AbstractVector, y::AbstractVector, r::Real;
                               xlim::Tuple, ylim::Tuple,
@@ -666,6 +694,22 @@ function add_tm_triangles!(
     return plt
 end
 
+# put near your other small utilities
+function _draw_edges_batched!(plt, x::AbstractVector, y::AbstractVector,
+                              edges::Vector{Tuple{Int,Int}};
+                              lw::Real=0.8, alpha::Real=0.9, color=:black)
+    n = length(edges)
+    xs = Vector{Float64}(undef, 3n)
+    ys = Vector{Float64}(undef, 3n)
+    k = 1
+    @inbounds for (u,v) in edges
+        xs[k] = x[u]; ys[k] = y[u]; k += 1
+        xs[k] = x[v]; ys[k] = y[v]; k += 1
+        xs[k] = NaN;  ys[k] = NaN;  k += 1
+    end
+    plot!(plt, xs, ys; seriestype=:path, lw=lw, alpha=alpha, color=color, label=false)
+    return plt
+end
 
 # -------------------------
 # Main LOD plotter
@@ -709,6 +753,9 @@ function plot_monomers_lod(
     tm_inset_frac::Real=0.10,
     tm_lw::Union{Real,Symbol}=:auto,
     tm_size_frac::Real=0.28,
+    # in the function signature, add:
+    edges::Union{Nothing,Vector{Tuple{Int,Int}}}=nothing,
+
 )
     N = length(x)
     if isempty(x) || isempty(y)
@@ -736,7 +783,7 @@ function plot_monomers_lod(
 
     # 3) LOD
     if lod == :auto
-        lod = N ≤ 100 ? :detail : (N ≤ 10_000 ? :medium : :massive)
+        lod = N ≤ 100 ? :detail : (N ≤ 500 ? :medium : :massive)
     end
 
     # 4) limits + ticks
@@ -792,16 +839,34 @@ function plot_monomers_lod(
 
     # 7) plot
     plt = nothing
-
+    println("i'm here")
+    println(lod)
+    println(N)
     if lod == :massive
-        counts, xedges, yedges = density_grid(
-            clamp.(xT, first(xlim), last(xlim)),
-            clamp.(yT, first(ylim), last(ylim)); bins=bins
-        )
-        plt = heatmap(xedges, yedges, counts;
+        println("plotting massive")
+        # Base figure with axes/ticks, no monomer markers
+        plt = plot(
             aspect_ratio=:equal, legend=false, dpi=dpi, size=figsize,
             xlim=xlim, ylim=ylim, xticks=xtick_vals, yticks=ytick_vals,
-            color=cgrad([:blue, :red]))
+            grid=false
+        )
+
+        if edges !== nothing && !isempty(edges)
+            # draw backbone ONLY (no points) using transformed coords (xT,yT)
+            _draw_edges_batched!(plt, xT, yT, edges; lw=0.7, alpha=0.85, color=:black)
+        else
+            @warn "plot_monomers_lod: edges not provided; massive mode wants precomputed backbone"
+        end
+
+        # skip the rest of the body for massive mode
+        xlabel!(plt, "Distance ($(unit_label(u)))")
+        ylabel!(plt, "Distance ($(unit_label(u)))")
+        if save_path !== nothing
+            savefig(plt, save_path)
+            println("Plot saved to: $save_path")
+        end
+        return plt
+
     else
         idx = 1:length(xT)
         if lod == :medium && N > sample_cap_points
@@ -834,7 +899,7 @@ function plot_monomers_lod(
             draw_backbone!(plt, xT, yT, edges; lc=:black, lw=1.5, alpha=0.9)  # f2
         end
 
-        
+
 
         # --- Standalone backbone figure with colored segments + vertices -------------
         plt_backbone = plot(; size=(1600,1600), aspect_ratio=:equal, legend=false, xlim=xlim, ylim=ylim)
@@ -848,6 +913,7 @@ function plot_monomers_lod(
 
             # DEGREE-BASED FEATURES (f1)
             feat = backbone_features(xT, yT, edges_back)
+            compare_edges(state, edges)
 
             # 💡 CURVATURE REFINEMENT (split at turning points)
             # 1) detect + split with looser params
@@ -935,36 +1001,6 @@ function plot_monomers_lod(
                 savefig(plt_backbone, replace(save_path, ".png" => "_backbone.png"))
             end
         end
-
-
-
-
-        ## TODO: this is imageJ backbone plotter.
-        # plt_backbone = plot(; 
-        #     size = (800, 800),
-        #     aspect_ratio = :equal,
-        #     legend = false,
-        #     xlim = xlim,
-        #     ylim = ylim,
-        #     axis = false,          # remove axis ticks/labels
-        #     framestyle = :none,    # remove frame
-        #     background_color = :black  # black background
-        # )
-
-        # if r_plot_unit !== nothing
-        #     _draw_contacts_grid!(plt_backbone, xT, yT, r_plot_unit;
-        #         xlim = xlim,
-        #         ylim = ylim,
-        #         contact_scale = contact_scale,
-        #         max_lines = contact_max_lines,
-        #         lw = 2,
-        #         color = :white   # backbone in white
-        #     )
-        #     if save_path !== nothing
-        #         savefig(plt_backbone, replace(save_path, ".png" => "_backbone.png"))
-        #     end
-        # end
-
 
         # compass legend
         begin
@@ -1074,40 +1110,32 @@ end
 
 using Plots
 
-"""
-Plot W (probabilities) and K (counts) with different color mappings.
-- W: clamped/normalized to [0,1], perceptual palette (:viridis).
-- K: log10(count+1) to compress heavy tails, contrasty palette (:magma).
-- Angle ticks at 0°, 90°, 180°, 270° assuming 72×72 (5° bins).
-"""
-function plot_W_vs_K(W::AbstractMatrix, K::AbstractMatrix;
-                     normalize_W::Bool=true,
-                     add_angle_ticks::Bool=true,
-                     save_path::Union{Nothing,String}=nothing)
+function plot_W_vs_K_max(W::AbstractMatrix, K::AbstractMatrix;
+                         add_angle_ticks::Bool=true,
+                         save_path::Union{Nothing,String}=nothing)
 
     @assert size(W) == size(K) "W and K must have same shape (e.g., 72×72)."
-    ZED = cgrad(:roma, 10, categorical = true, scale = :exp)
+    ZED = cgrad(:roma, 10, categorical=true, scale=:exp)
 
-    # --- W: probability map ---
-    Wp = normalize_W ? clamp.(W, 0, 1) : W
-    clW = normalize_W ? (0.0, 1.0) : (minimum(Wp), maximum(Wp))
-    pltW = heatmap(Wp;
-        aspect_ratio = :equal,
-        color        = ZED,  # good for probabilities
-        clims        = clW,
-        colorbar_title = normalize_W ? "prob (0–1)" : "prob",
-        title       = "Input connection probability (W)")
+    # --- Normalize both W and K by their own max ---
+    Wn = W ./ max(maximum(W), eps())
+    Kn = K ./ max(maximum(K), eps())
 
-    # --- K: count map with log compression ---
-    Klog = log10.(K .+ 1)  # log10 for readable dynamic range
-    kmin, kmax = extrema(Klog)
-    kmax == kmin && (kmax += 1e-6)  # avoid degenerate color scale
-    pltK = heatmap(Klog;
-        aspect_ratio   = :equal,
-        color          = ZED, # distinct from W
-        clims          = (kmin, kmax),
-        colorbar_title = "log10(count + 1)",
-        title          = "Simulated connections (K)")
+    clims = (0.0, 1.0)  # shared colorbar limits
+
+    pltW = heatmap(Wn;
+        aspect_ratio=:equal,
+        color=ZED,
+        clims=clims,
+        colorbar_title="normalized (0–1)",
+        title="Input connection probability (W)")
+
+    pltK = heatmap(Kn;
+        aspect_ratio=:equal,
+        color=ZED,
+        clims=clims,
+        colorbar_title="normalized (0–1)",
+        title="Simulated connections (K)")
 
     # --- Degree ticks (0°,90°,180°,270°) for 72 bins (5° each) ---
     if add_angle_ticks && size(W,1) == 72 && size(W,2) == 72
@@ -1126,6 +1154,7 @@ function plot_W_vs_K(W::AbstractMatrix, K::AbstractMatrix;
     end
     return fig
 end
+
 
 # -------------------------
 # Public entry that uses state/config
@@ -1148,9 +1177,6 @@ function generate_plots(state::AbstractState, config;
     overlay = getfield(config, :grid_overlay)  # avoids getproperty overload surprises
     file_name = basename(config.file_path)
     N = length(x)
-
-    lod = N ≤ 100 ? :detail : (N ≤ 10_000 ? :medium : :massive)
-
     monomer_path = "$(output_prefix)_$(N)_$(file_name)_placement.png"
 
     plot_monomers_lod(
@@ -1159,8 +1185,7 @@ function generate_plots(state::AbstractState, config;
         boxSize=box_size,
         monomer_radius=state.radius,     # in data units
         show_grid=overlay,
-        show_orientation=(lod != :massive),
-        lod=lod,
+        lod=:auto,
         tick_step=:auto,
         orient_every=1,
         mode=:min,
@@ -1174,12 +1199,14 @@ function generate_plots(state::AbstractState, config;
         contact_scale=1.02,
         contact_max_lines=min(200_000, 10 * length(x)),
         # NEW
-        show_contour=show_contour,
+        # show_contour=show_contour,
+        show_contour = false,
         tm_style=tm_style,
         tm_len_frac=tm_len_frac,
         tm_inset_frac=tm_inset_frac,
         tm_lw=tm_lw,
         tm_size_frac=tm_size_frac,
+        edges = state.edges
     )
 
     println("Saved:\n  ", monomer_path)
@@ -1188,7 +1215,7 @@ function generate_plots(state::AbstractState, config;
     if hasproperty(state, :W) && hasproperty(state, :K)
         out_wk = replace(monomer_path, "_placement.png" => "_W_vs_K.png")
         try
-            plot_W_vs_K(state.W, state.K; normalize_W=true, save_path=out_wk)
+            plot_W_vs_K_max(state.W, state.K; save_path=out_wk)
         catch err
             @warn "plot_W_vs_K failed: $err"
         end

@@ -9,6 +9,21 @@
 include("dependencies.jl")
 include("utils.jl")
 
+const EPS = 1e-9  # put near top of file
+const CONTACT_SCALE = 1.02  # keep a single source of truth
+const TAU_ROW   = 0.05   # row threshold (knock out tiny mass)
+const GAMMA_ROW = 2.0    # row sharpening (>=1)
+const TOPK_ROWS = 40      # keep only top-k rows per parent (set 0 to disable)
+const TAU_COL   = 0.03
+const GAMMA_COL = 1.0
+
+
+@inline dist2(x1,y1,x2,y2) = (x1-x2)*(x1-x2) + (y1-y2)*(y1-y2)
+# put near the top once
+lo2(r::Real; scale::Real=CONTACT_SCALE) = (2r * (scale * 0.98))^2  # inner guard (optional)
+hi2(r::Real; scale::Real=CONTACT_SCALE) = (2r * scale)^2           # must match find_contact_edges
+
+
 # ============================
 # Function: add_monomer(x_coords,
 # Description: [Add a short description of what this function does.]
@@ -21,6 +36,7 @@ function add_monomer(state::SimulationState, config::Config, boxIndx::Int)
     radius, boxNum, boxList, K = state.radius, state.boxNum, state.boxList, state.K
     W = state.W
     last_to_check = state.last_to_check
+    # last_to_check = 50
 
     boxSize, NNrestriction, boxCap = config.box_size, config.nn_restriction, config.box_capacity
 
@@ -40,23 +56,35 @@ function add_monomer(state::SimulationState, config::Config, boxIndx::Int)
     # Determine box coordinates for the new position
     (xtmp, ytmp) = get_box_coordinates(new_x, new_y, boxSize)
 
-    # Ensure the box is within capacity
-    while boxNum[xtmp, ytmp] >= boxCap
-        xtmp, ytmp = random_box_shift(xtmp, ytmp)  # Refactored into a helper function
-        xtmp, ytmp = max(xtmp, 1), max(ytmp, 1)    # Ensure coordinates stay within bounds
+    # Reject if this box is full — do NOT relocate
+    if boxNum[xtmp, ytmp] >= boxCap
+        return false, -2   # "box full"
     end
 
-    # Adjust new_x and new_y based on box coordinates
-    new_x = (xtmp - 1) * boxSize + (new_x % boxSize)
-    new_y = (ytmp - 1) * boxSize + (new_y % boxSize)
+
+    # # Ensure the box is within capacity
+    # while boxNum[xtmp, ytmp] >= boxCap
+    #     xtmp, ytmp = random_box_shift(xtmp, ytmp)  # Refactored into a helper function
+    #     xtmp, ytmp = max(xtmp, 1), max(ytmp, 1)    # Ensure coordinates stay within bounds
+    # end
+
+    # # Adjust new_x and new_y based on box coordinates
+    # new_x = (xtmp - 1) * boxSize + (new_x % boxSize)
+    # new_y = (ytmp - 1) * boxSize + (new_y % boxSize)
 
     # Build column weights by multiplying rows
-    angles_for_pos = relative_angle[idx] isa AbstractVector ? relative_angle[idx] : [relative_angle[idx]]
+    # ensure we index with Ints (not Any)
+    angles_for_pos = relative_angle[idx] isa AbstractVector ?
+                    Int[relative_angle[idx]...] : [Int(relative_angle[idx])]
 
-    col_weights = ones(Float64, size(W, 2))
+    col_weights = zeros(Float64, size(W, 2))
     for a in angles_for_pos
-        col_weights .*= @view W[a, :]
+        v = @view(W[a, :])                           # <-- parenthesize the @view target
+        col_weights .+= (max.(v .- TAU_COL, 0.0)).^(GAMMA_COL)
     end
+    col_weights .= max.(col_weights, eps())
+    ridx = sample(1:length(col_weights), Weights(col_weights))
+
 
     if all(iszero, col_weights)
         return false, -4   # invalid position: no joint probability
@@ -66,44 +94,56 @@ function add_monomer(state::SimulationState, config::Config, boxIndx::Int)
     ridx = sample(1:length(col_weights), Weights(col_weights))
 
     
-
-
-
-    # Check for collisions and update neighbors
+    # 3×3 neighborhood sweep around candidate's box (xtmp, ytmp)
     sc = 0
     collision_detected = false
-    new_NN_updates = Dict()
+    new_NN_updates = Dict{Int,Int}()
+    touch_contacts = Int[]               # raw list of all touched neighbors
 
-    # for i1 in max(1, xtmp - 1):xtmp + 1
-    #     for i2 in max(1, ytmp - 1):ytmp + 1
-    #         for i in 1:boxNum[i1, i2]
-    #             idx1 = boxList[i1, i2][i]
+    # clamp to grid bounds
+    xlo = max(1, xtmp - 1); xhi = min(size(boxNum, 1), xtmp + 1)
+    ylo = max(1, ytmp - 1); yhi = min(size(boxNum, 2), ytmp + 1)
+    @inbounds for i1 in xlo:xhi
+        for i2 in ylo:yhi
+            inds = get(boxList, (i1, i2), Int[])
+            for idx1 in inds
+                d2 = dist2(new_x, new_y, x_coords[idx1], y_coords[idx1])
 
-    #             if is_neighbor(new_x, new_y, x_coords[idx1], y_coords[idx1], radius)
-    #                 if is_collision(new_x, new_y, x_coords[idx1], y_coords[idx1], radius) || NN[idx1] + 1 > NNrestriction
-    #                     collision_detected = true
-    #                 else
-    #                     new_NN_updates[idx1] = get(new_NN_updates, idx1, NN[idx1]) + 1
-    #                     sc += 1
-    #                 end
-    #             end
-    #         end
-    #     end
+                if d2 < lo2(radius)                         # overlap => collision
+                    collision_detected = true
+                    break
+                elseif d2 <= hi2(radius)                    # touching => valid neighbor
+                    if NN[idx1] + 1 > NNrestriction
+                        collision_detected = true
+                        break
+                    end
+                    push!(touch_contacts, idx1)
+                    new_NN_updates[idx1] = get(new_NN_updates, idx1, NN[idx1]) + 1
+                    sc += 1
+                end
+            end
+        end
+        collision_detected && break
+    end
+
+    # (optional) cap the new monomer too
+    if !collision_detected && sc > NNrestriction
+        return false, -3
+    end
+
+    # Require at least one valid contact; otherwise reject
+    # if !collision_detected && sc == 0
+    #     return false, -6   # "no supporting neighbor"
     # end
-
-    for i in eachindex(x_coords)
-        if is_collision(new_x, new_y, x_coords[i], y_coords[i], radius)
-            collision_detected = true
-        end 
-    end 
-
+    
     if collision_detected
         return false, -4
     else
-        for (idx, new_val) in new_NN_updates
-            NN[idx] = new_val
+        for (idx1, newval) in new_NN_updates
+            NN[idx1] = newval
         end
     end
+
 
     # Add new monomer to the state
     new_index = size(x_coords, 1) + 1
@@ -111,17 +151,47 @@ function add_monomer(state::SimulationState, config::Config, boxIndx::Int)
     push!(y_coords, new_y)
     push!(NN, sc)
 
+    # keep degree vector in sync
+    if length(state.degree) < new_index
+        resize!(state.degree, new_index)
+    end
+    state.degree[new_index] = 0
+
+
     # Update box data structures
     update_box_list!(boxList, boxNum, new_x, new_y, new_index, :add, config)
 
     # Update rotation and matrix K
     old_x, old_y = x_coords[tar[idx]], y_coords[tar[idx]]
+
     dx, dy = new_x - old_x, new_y - old_y
-    tt = round(atan(-dy, -dx) * 180 / pi)
-    push!(rotation, (tt - ridx * 5 + 720) % 360)
+    tt_deg = round(Int, atan(-dy, -dx) * 180 / pi)  # cast to Int
+    rot = mod(tt_deg - ridx * 5, 360)               # 0..359, stays Int
+    push!(rotation, rot)
+
     for a in angles_for_pos
         K[a, ridx] += 1
     end
+
+    unique!(touch_contacts)  # remove duplicates
+
+    # always ensure parent is included
+    parent = tar[idx]
+    if parent != new_index && !(parent in touch_contacts)
+        push!(touch_contacts, parent)
+    end
+
+    parent = tar[idx]
+    @inbounds for v in touch_contacts
+        v == new_index && continue
+        u = v < new_index ? v : new_index
+        w = v < new_index ? new_index : v
+        push!(state.edges, (u, w))
+        state.degree[v]        += 1
+        state.degree[new_index] += 1
+    end
+
+
 
     return true, boxIndx, [new_x, new_y]
 end
@@ -133,84 +203,95 @@ end
 # Inputs: [List inputs here.]
 # Outputs: [List outputs here.]
 # ============================
-function available_space(x_coords, y_coords, radius, W, rotation, NN, LAST_TO_CHECK, NNrestriction)
-    available_x = []
-    available_y = []
-    available_p = []
-    relative_angle = []
-    target = []
-    tmp = []
-    if (length(x_coords) < LAST_TO_CHECK)
-        for i in 1:length(x_coords)
-            if(NN[i] < NNrestriction)
-                available_angles = identify_available_angles(x_coords, y_coords, radius,i, NN, NNrestriction)
-                for angle in 0:5:355
-                    angleR = calculate_relativeAngle(rotation[i], angle)
-                    angleidx1 = aidx(angleR)
-                    p = sum(W[angleidx1, :])
-                    if(p!=0)
-                        new_x = round(x_coords[i] + 2 * radius * cosd(angle), digits = 3)
-                        new_y = round(y_coords[i] + 2 * radius * sind(angle), digits = 3)
-                        push!(available_x, new_x)
-                        push!(available_y, new_y)
-                        push!(available_p, p)
-                        push!(relative_angle, angleidx1)
-                        push!(target, i)
-                    end 
-
-                end
-            end 
-        end
-    else
-        for i in 1+length(x_coords)-LAST_TO_CHECK:length(x_coords)
-            if(NN[i] < NNrestriction)
-                available_angles = identify_available_angles(x_coords, y_coords, radius,i, NN, NNrestriction)
-                for angle in available_angles
-                    angleR = calculate_relativeAngle(rotation[i], angle)
-                    angleidx1 = aidx(angleR)
-                    p = sum(W[angleidx1, :])
-
-                    if(p!=0)
-                        new_x = round(x_coords[i] + 2 * radius * cosd(angle), digits = 3)
-                        new_y = round(y_coords[i] + 2 * radius * sind(angle), digits = 3)
-                        push!(available_x, new_x)
-                        push!(available_y, new_y)
-                        push!(available_p, p)
-                        push!(relative_angle, angleidx1)
-                        push!(target, i)
-                    end 
-            
-                end
-            end 
-        end
+# helper to delete multiple indices safely (reverse order)
+function _delmany!(A::AbstractVector, idxs::AbstractVector{Int})
+    for j in Iterators.reverse(sort(idxs))
+        deleteat!(A, j)
     end
-
-    overlapping_indices = []
-    seen_positions = []  # To track seen (x, y) positions
-
-    for i in 1:length(available_x)
-        position = (available_x[i], available_y[i])
-        found_overlap = false
-
-        for (j, seen_position) in enumerate(seen_positions)
-            if isapprox(seen_position[1], position[1]) && isapprox(seen_position[2], position[2])
-                push!(overlapping_indices, i)  # Record the current index
-                push!(overlapping_indices, j)    # Record the index of the previously seen position
-                found_overlap = true
-                break  # Exit inner loop since we found an overlap
-            end
-        end
-
-        if !found_overlap
-            push!(seen_positions, position)
-        end
-    end
-
-    unique_x, unique_y, updated_probabilities, unique_angles, unique_targets = 
-    update_probabilities_fast(W, available_x, available_y, available_p, relative_angle, target)
-
-    unique_x, unique_y, updated_probabilities, unique_angles, unique_targets
+    return A
 end
+
+function _prune_parent_topk!(
+    available_x::Vector{Float64},
+    available_y::Vector{Float64},
+    available_p::Vector{Float64},
+    relative_angle::Vector{Any},
+    target::Vector{Int},
+    start_len::Int,             # length(available_p) BEFORE pushing this parent's angles
+    K::Int
+)
+    K <= 0 && return
+    lo = start_len + 1
+    hi = length(available_p)
+    lo > hi && return
+    idxs = lo:hi
+    length(idxs) <= K && return
+
+    # find top-K (largest available_p) among this parent's pushes
+    pool = collect(idxs)
+    keep_perm = partialsortperm(pool, 1:K, by = j -> available_p[j], rev = true)
+    keep = Set(pool[keep_perm])
+    drop = [j for j in pool if j ∉ keep]
+    isempty(drop) && return
+
+    _delmany!(available_x, drop)
+    _delmany!(available_y, drop)
+    _delmany!(available_p, drop)
+    _delmany!(relative_angle, drop)
+    _delmany!(target, drop)
+end
+
+function available_space(x_coords, y_coords, radius, W, rotation, NN, LAST_TO_CHECK, NNrestriction)
+    available_x = Float64[]           # candidate x
+    available_y = Float64[]           # candidate y
+    available_p = Float64[]           # per-candidate mass (pre-merge)
+    relative_angle = Vector{Any}()    # row index or Vector{Int} of rows
+    target = Int[]                    # parent index (proposing monomer)
+
+    if length(x_coords) < LAST_TO_CHECK
+        istart, iend = 1, length(x_coords)
+    else
+        istart, iend = length(x_coords) - LAST_TO_CHECK + 1, length(x_coords)
+    end
+
+    for i in istart:iend
+        if NN[i] < NNrestriction
+            avail = identify_available_angles(x_coords, y_coords, radius, i, NN, NNrestriction)
+
+            # remember where this parent's block starts
+            start_len = length(available_p)
+
+            for angle in avail
+                angleR   = calculate_relativeAngle(rotation[i], angle)
+                angleidx = aidx(angleR)
+
+                # sharpened row mass
+                v = @view(W[angleidx, :])  # parenthesize target for @view
+                p_raw   = sum(v)
+                p_sharp = max(p_raw - TAU_ROW, 0.0)^GAMMA_ROW
+                if p_sharp > 0
+                    new_x = x_coords[i] + 2 * radius * cosd(angle)
+                    new_y = y_coords[i] + 2 * radius * sind(angle)
+                    push!(available_x, new_x)
+                    push!(available_y, new_y)
+                    push!(available_p, p_sharp)
+                    push!(relative_angle, angleidx)
+                    push!(target, i)
+                end
+            end
+
+            # keep only top-K angles for this parent
+            _prune_parent_topk!(available_x, available_y, available_p, relative_angle, target,
+                                start_len, TOPK_ROWS)
+        end
+    end
+
+    unique_x, unique_y, updated_probabilities, unique_angles, unique_targets =
+        update_probabilities_fast(W, available_x, available_y, available_p, relative_angle, target)
+
+    return unique_x, unique_y, updated_probabilities, unique_angles, unique_targets
+end
+
 
 """
 Group overlapping candidate positions and combine their probabilities.
@@ -236,7 +317,7 @@ function update_probabilities_fast(
     relative_angle,     # Vector{Int} or Vector{Vector{Int}}
     target::AbstractVector;
     atol::Float64 = 0.05,    # positional merge tolerance (world units)
-    rule::Symbol = :product  # :product (default) or :sum as fallback
+    rule::Symbol = :sharp_sum  # :sharp_sum | :sum | :product
 )
     @assert length(available_x) == length(available_y) == length(available_p) ==
             length(relative_angle) == length(target)
@@ -266,6 +347,25 @@ function update_probabilities_fast(
             # legacy/fallback behavior
             return max(sum(@view available_p[idxs]), eps())
         end
+
+        if rule === :sharp_sum
+            acc = 0.0
+            @inbounds for j in idxs
+                rows_j = relative_angle[j]
+                if rows_j isa AbstractVector
+                    pj = 0.0
+                    for r in rows_j
+                        pj += max(sum(@view W[r, :]) - TAU_ROW, 0.0)^GAMMA_ROW
+                    end
+                    acc += pj
+                else
+                    r = rows_j::Int
+                    acc += max(sum(@view W[r, :]) - TAU_ROW, 0.0)^GAMMA_ROW
+                end
+            end
+            return max(acc^(1/GAMMA_ROW), eps())   # generalized mean (~softmax)
+        end
+
         # PRODUCT of per-edge masses. A candidate may carry one row or many (Vector{Int})
         # For a candidate with multiple rows, we multiply their row-sums first.
         acc = 1.0
@@ -412,7 +512,7 @@ function run(fn; log_path=pwd()*"/"*"logs/", save_path=pwd()*"/"*"saved_states/m
                 println(state.error_dic)
             end
     
-            if cc > 100
+            if cc > 10000
                 println("broke: too many collisions/empty row")
                 break
             end

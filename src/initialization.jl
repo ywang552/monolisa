@@ -46,24 +46,39 @@ mutable struct SimulationState <: AbstractState
     MN::Int
     W::Matrix{Float64}
     K::Matrix{Float64}
+    edges::Vector{Tuple{Int,Int}}      # NEW: persisted contact edges (undirected)
+    degree::Vector{Int}                # NEW: degree per monomer
     error_dic::Vector{Int}
 end
 
 struct MinimalState <: AbstractState
     x_coords::Vector{Float64}
     y_coords::Vector{Float64}
+    rotation::Vector{Float64}
     box_size::Int
     W::Matrix{Float64}
     K::Matrix{Float64}
+    edges::Vector{Tuple{Int,Int}}      # NEW
+    degree::Vector{Int}                # NEW
+    endpoints::Vector{Int}             # NEW
+    junctions::Vector{Int}             # NEW
 end
 
 function create_minimal_state(state::SimulationState)
+    deg = state.degree
+    endpoints = findall(d -> d == 1, deg)
+    junctions = findall(d -> d >= 3, deg)
     return MinimalState(
         state.x_coords,
         state.y_coords,
+        state.rotation,
         state.box_size,
         state.W,
-        state.K
+        state.K,
+        copy(state.edges),
+        copy(deg),
+        endpoints,
+        junctions,
     )
 end
 
@@ -116,11 +131,14 @@ function initialize_simulation(config::Config)
     # Return initialized state
     return SimulationState(
         x_coords, y_coords, rotation,
-        NN, radius, 5,  # last_to_check
+        NN, radius, 20,  # last_to_check
         NNrestriction, boxNum, boxList,
         boxCap, boxSize, MN, W, K,
-        zeros(Int, 4)  # error_dic
+        Tuple{Int,Int}[],   # edges: start empty
+        [0],                # degree: seed monomer has degree 0
+        zeros(Int, 4)       # error_dic
     )
+
     
 end
 

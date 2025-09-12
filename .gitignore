@@ -18,3 +18,6 @@ Project.toml
 
 # Plots
 plots/
+
+#patches
+patches/
