@@ -41,7 +41,7 @@ config = Config(
     box_capacity=16,
     monomer_radius=1,
     grid_size=200,
-    max_monomers=8000,
+    max_monomers=500,
     # max_monomers=100,
     # file_path=ARGS[1],
     file_path="Claudins/c2_2mut.txt",
@@ -57,6 +57,54 @@ function main()
     # Save results or generate plots
     return state
 end
+
+
+"""
+    report_overconnected(state; max_deg=3, use_geometric=false, contact_scale=1.02)
+
+Check each monomer's number of neighbors and report any with degree > max_deg.
+"""
+function report_overconnected(state;
+    max_deg::Int=2,
+    use_geometric::Bool=false,
+    contact_scale::Real=1.02
+)
+
+    x, y, r = state.x_coords, state.y_coords, state.radius
+    xmin, xmax = minimum(x), maximum(x)
+    ymin, ymax = minimum(y), maximum(y)
+    pad = 2r
+    xlim = (xmin - pad, xmax + pad)
+    ylim = (ymin - pad, ymax + pad)
+    edge_list = find_contact_edges(x, y, r; xlim=xlim, ylim=ylim,
+                                    contact_scale=contact_scale)
+
+
+    # --- degree map ---
+    deg = Dict{Int,Int}()
+    for (u,v) in edge_list
+        u == v && continue
+        deg[u] = get(deg,u,0) + 1
+        deg[v] = get(deg,v,0) + 1
+    end
+
+    offenders = [i for (i,d) in deg if d > max_deg]
+
+    println("Neighbor-degree check (threshold = $max_deg)")
+    println("Total monomers: ", length(state.x_coords),
+            " | edges considered: ", length(edge_list))
+    if isempty(offenders)
+        println("✓ No monomers exceed degree $max_deg.")
+    else
+        println("⚠ ", length(offenders), " monomer(s) exceed degree $max_deg:")
+        for i in offenders
+            println("  monomer $i → degree $(deg[i])")
+        end
+    end
+
+    return (; max_deg, offenders, degrees=deg, edge_list)
+end
+
 
 
 
@@ -82,6 +130,11 @@ overlay_path = prefix * "overlay_curvature.png"
 generate_plots(state, config; output_prefix = prefix*"arcs_$(stamp)", show_contour=true, tm_style=:nothing)
 
 
+# Fast path: uses state.edges from the simulation
+res = report_overconnected(state; max_deg=3)
+
+# Cross-check against geometric contacts (same logic as backbone plotting)
+res_geom = report_overconnected(state; max_deg=3, use_geometric=true, contact_scale=1.02)
 
 
 # x = state.x_coords

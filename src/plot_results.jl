@@ -783,7 +783,7 @@ function plot_monomers_lod(
 
     # 3) LOD
     if lod == :auto
-        lod = N ≤ 100 ? :detail : (N ≤ 500 ? :medium : :massive)
+        lod = N ≤ 100 ? :detail : (N ≤ 800 ? :medium : :massive)
     end
 
     # 4) limits + ticks
@@ -1199,8 +1199,8 @@ function generate_plots(state::AbstractState, config;
         contact_scale=1.02,
         contact_max_lines=min(200_000, 10 * length(x)),
         # NEW
-        # show_contour=show_contour,
-        show_contour = false,
+        show_contour=show_contour,
+        # show_contour = false,
         tm_style=tm_style,
         tm_len_frac=tm_len_frac,
         tm_inset_frac=tm_inset_frac,
