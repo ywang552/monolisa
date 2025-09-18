@@ -443,6 +443,151 @@ end
 
 
 """
+    seed_new_start_far!(state, config; dmin=100.0, dmax=500.0, tries=500)
+
+Attempts to place a new monomer far from the existing structure.
+- Chooses a random side of the current bounding box.
+- Places it at a random distance between `dmin` and `dmax`.
+- Checks grid capacity and collisions (using the same rules as `add_monomer`).
+- If successful, commits the monomer with **no edges**.
+
+Returns:
+- `true` if a new seed was placed.
+- `false` if all attempts failed.
+"""
+function seed_new_start_far!(state, config; dmin::Float64=100.0, dmax::Float64=500.0, tries::Int=500)
+    xs, ys = state.x_coords, state.y_coords
+    isempty(xs) && return false
+
+    # Bounding box of current monomers
+    xmin, xmax = minimum(xs), maximum(xs)
+    ymin, ymax = minimum(ys), maximum(ys)
+
+    radius  = state.radius
+    boxNum  = state.boxNum
+    boxList = state.boxList
+    nrows, ncols = size(boxNum)
+
+    @inbounds for _ in 1:tries
+        # Random side and distance
+        d    = rand()*(dmax - dmin) + dmin
+        side = rand(1:4)
+
+        x = 0.0; y = 0.0
+        if side == 1
+            x = xmin - d; y = rand()*(ymax - ymin) + ymin
+        elseif side == 2
+            x = xmax + d; y = rand()*(ymax - ymin) + ymin
+        elseif side == 3
+            y = ymin - d; x = rand()*(xmax - xmin) + xmin
+        else
+            y = ymax + d; x = rand()*(xmax - xmin) + xmin
+        end
+
+        # Map to grid box
+        row, col = get_box_coordinates(x, y, config.box_size)
+        if !(1 <= row <= nrows && 1 <= col <= ncols)
+            continue
+        end
+        # Box capacity check
+        if boxNum[row, col] >= config.box_capacity
+            continue
+        end
+
+        # Collision check in 3×3 neighborhood (like add_monomer)
+        collision = false
+        xlo = max(1, row - 1); xhi = min(nrows, row + 1)
+        ylo = max(1, col - 1); yhi = min(ncols, col + 1)
+        for r in xlo:xhi
+            for c in ylo:yhi
+                inds = get(boxList, (r, c), Int[])
+                for idx1 in inds
+                    if dist2(x, y, xs[idx1], ys[idx1]) < lo2(radius)
+                        collision = true
+                        break
+                    end
+                end
+                collision && break
+            end
+            collision && break
+        end
+        collision && continue
+
+        # --- Commit seed (no edges) ---
+        new_index = length(xs) + 1
+        push!(state.x_coords, x)
+        push!(state.y_coords, y)
+        push!(state.NN, 0)
+        if length(state.degree) < new_index
+            resize!(state.degree, new_index)
+        end
+        state.degree[new_index] = 0
+        push!(state.rotation, 0)  # can also randomize if desired
+
+        update_box_list!(state.boxList, state.boxNum, x, y, new_index, :add, config)
+        return true
+    end
+
+    return false
+end
+
+
+"""
+Seed a short strand far from the existing structure and grow it in-place.
+
+Returns: number of monomers placed in this seeding attempt (>=0).
+"""
+function seed_new_strand_far!(
+    state, config;
+    L::Int = state.last_to_check,    # target length of the new strand
+    dmin::Float64 = 100.0,
+    dmax::Float64 = 500.0,
+    tries::Int = 500,                # spot attempts for the first seed
+    per_node_fail::Int = 2000        # max add_monomer fails per subsequent node
+)
+    # 1) place the first seed far away
+    ok = seed_new_start_far!(state, config; dmin=dmin, dmax=dmax, tries=tries)
+    ok || return 0
+
+    # indices bookkeeping
+    first_idx = length(state.x_coords)          # the seed we just added
+    placed = 1
+
+    # 2) grow up to L-1 more nodes using the normal add_monomer pipeline,
+    #    but anchor ONLY on the most recent nodes from this new strand.
+    #    We achieve this by keeping last_to_check equal to how many nodes
+    #    this new strand currently has.
+    local_window = 1
+    for _ in 2:L
+        local_fails = 0
+        # anchor only to the new strand's recent nodes
+        state.last_to_check = local_window      # available_space uses this window
+        # try until we place one, or give up for this node
+        while true
+            rs = add_monomer(state, config, 1)  # boix arg is unused upstream anyway
+            if length(rs) == 3
+                x = rs[1]
+            else
+                x = rs[1]
+            end
+            if x
+                placed += 1
+                local_window = min(local_window + 1, L)
+                break
+            else
+                local_fails += 1
+                if local_fails >= per_node_fail
+                    # couldn't place this node; stop extending the seed
+                    return placed
+                end
+            end
+        end
+    end
+    return placed
+end
+
+
+"""
 Runs the simulation and saves the minimal state.
 
 Arguments:
@@ -511,11 +656,28 @@ function run(fn; log_path=pwd()*"/"*"logs/", save_path=pwd()*"/"*"saved_states/m
                 println(size(state.x_coords, 1))
                 println(state.error_dic)
             end
+
     
             if cc > 10000
-                println("broke: too many collisions/empty row")
-                break
+                println("strand stalled (cc=$(cc)); seeding a new far mini-strand…")
+                placed_seed = seed_new_strand_far!(
+                    state, config;
+                    L = state.last_to_check,      # e.g., 15 from your snippet
+                    dmin = 2., dmax = 4.,
+                    tries = 500, per_node_fail = 2000
+                )
+                if placed_seed > 0
+                    # keep anchoring within THIS new strand first
+                    state.last_to_check = min(state.last_to_check, placed_seed)
+                    cc = 0
+                    continue   # resume the SAME loop; normal growth takes over
+                else
+                    println("no room to seed new mini-strand; breaking.")
+                    break
+                end
             end
+
+
     
             if x && size(state.x_coords, 1) % 5000 == 0
                 println("Placed ", size(state.x_coords, 1), " monomers")

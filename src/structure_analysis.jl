@@ -90,6 +90,23 @@ function segments_from_backbone(x::AbstractVector{<:Real},
     return segments, endpoints, junctions
 end
 
+
+function segments_from_backbone_cc(x::AbstractVector, y::AbstractVector,
+                                   edges::Vector{Tuple{Int,Int}})
+    normalize_edges!(edges)
+    g = SimpleGraph(max(length(x), length(y)))
+    for (u,v) in edges; add_edge!(g, u, v); end
+    segs = Vector{Vector{Int}}(); endpoints_all = Int[]; junctions_all = Int[]
+    for comp in connected_components(g)
+        setC = Set(comp)
+        comp_edges = [(u,v) for (u,v) in edges if (u in setC && v in setC)]
+        s,e,j = segments_from_backbone(x, y, comp_edges)  # your existing routine
+        append!(segs, s); append!(endpoints_all, e); append!(junctions_all, j)
+    end
+    return segs, unique(endpoints_all), unique(junctions_all)
+end
+
+
 """
 plot_segments!(x, y, segments; endpoints=[], junctions=[])
 Draw each segment in a distinct color; endpoints=cyan, junctions=green.
@@ -214,28 +231,6 @@ function plot_turning_angle_hist(dev_angles_deg::Vector{Float64}; nbins::Int=30,
                     title="Turning angles (graph-based)", legend=false)
     save_path !== nothing && savefig(plt, save_path)
     return plt
-end
-
-# Smooth density of segment lengths (wave curve)
-function plot_segment_length_density(x, y, segments;
-                                     npoints::Int=512,
-                                     bandwidth::Union{Nothing,Real,Symbol}=nothing,
-                                     save_path::Union{Nothing,String}=nothing)
-    lens = [_polyline_length(x,y,seg) for seg in segments]
-    isempty(lens) && return lens, nothing
-
-    kd = isnothing(bandwidth) ? kde(lens) : kde(lens, bandwidth)
-    xs, ys = kd.x, kd.density
-
-    plt = plot(xs, ys; xlabel="segment length (plot units)",
-               ylabel="density", title="Segment length (density)",
-               legend=false, lw=2)
-    # optional rug (little ticks on x-axis to show samples)
-    scatter!(plt, lens, zero.(lens); markersize=2, markerstrokewidth=0,
-             alpha=0.4, label=false)
-
-    save_path !== nothing && savefig(plt, save_path)
-    return lens, plt
 end
 
 # Smooth density of turning angles (deviation-from-straight in degrees)

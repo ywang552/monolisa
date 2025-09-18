@@ -9,7 +9,7 @@ using StatsBase
 # -------------------------
 # Config: physical mapping
 # -------------------------
-const NM_PER_DATA = 0.37  # 1 data unit = 0.37 nm
+const NM_PER_DATA = 1.55 
 
 # -------------------------
 # Small utilities
@@ -694,10 +694,10 @@ function add_tm_triangles!(
     return plt
 end
 
-# put near your other small utilities
+# Batched backbone lines (your function; kept here for locality)
 function _draw_edges_batched!(plt, x::AbstractVector, y::AbstractVector,
                               edges::Vector{Tuple{Int,Int}};
-                              lw::Real=0.8, alpha::Real=0.9, color=:black)
+                              lw::Real=1.5, alpha::Real=0.9, color=:black)
     n = length(edges)
     xs = Vector{Float64}(undef, 3n)
     ys = Vector{Float64}(undef, 3n)
@@ -710,6 +710,285 @@ function _draw_edges_batched!(plt, x::AbstractVector, y::AbstractVector,
     plot!(plt, xs, ys; seriestype=:path, lw=lw, alpha=alpha, color=color, label=false)
     return plt
 end
+
+"""
+    draw_backbone_with_roles!(plt, x, y, edges;
+        turn_thresh_deg=30,
+        role_ms=6,
+        contour_color=:black, contour_width=1.5)
+
+Draw backbone lines + role overlays using same contour/marker style you use elsewhere.
+"""
+function draw_backbone_with_roles!(plt, x::AbstractVector, y::AbstractVector,
+                                   edges::Vector{Tuple{Int,Int}};
+                                   turn_thresh_deg::Real=30)
+
+    N = length(x)
+
+    # --- base size scaling ---
+    base = clamp(8000.0 / N, 0.4, 6.0)   # 2000 → ~1, 8000 → ~0.5, floor at 0.4, cap at 6
+
+    ms_turn = base
+    ms_leaf = base * 1.5
+    ms_junc = base * 1.35
+
+    # 1) Backbone lines
+    _draw_edges_batched!(plt, x, y, edges; lw=2, alpha=0.9, color=:black)
+
+    # 2) Roles
+    roles, _, _ = classify_backbone_nodes(x, y, edges; turn_thresh_deg=turn_thresh_deg)
+    leaf_idx  = findall(r -> r === :leaf, roles)
+    junc_idx  = findall(r -> r === :junction, roles)
+    turn_idx  = findall(r -> r === :turning, roles)
+
+    # 3) Overlays — fill only, no contour
+    if !isempty(leaf_idx)
+        scatter!(plt, x[leaf_idx], y[leaf_idx];
+            marker=:circle, ms=ms_leaf,
+            markercolor=:cyan, markerstrokewidth=0, label=false)
+    end
+    if !isempty(junc_idx)
+        scatter!(plt, x[junc_idx], y[junc_idx];
+            marker=:circle, ms=ms_junc,
+            markercolor=:forestgreen, markerstrokewidth=0, label=false)
+    end
+    if !isempty(turn_idx)
+        scatter!(plt, x[turn_idx], y[turn_idx];
+            marker=:square, ms=ms_turn,
+            markercolor=:orange, markerstrokewidth=0, label=false)
+    end
+
+    return plt
+end
+
+
+
+# Map vertex -> degree
+degree_map(edges::Vector{Tuple{Int,Int}}) = begin
+    deg = Dict{Int,Int}()
+    @inbounds for (u,v) in edges
+        deg[u] = get(deg, u, 0) + 1
+        deg[v] = get(deg, v, 0) + 1
+    end
+    deg
+end
+
+# Angle deviation at deg==2 nodes (deviation from straight, in degrees)
+function _turn_deviation_deg(i::Int, x, y, nbrs::Vector{Vector{Int}})
+    n1, n2 = nbrs[i][1], nbrs[i][2]
+    v1x, v1y = x[n1] - x[i], y[n1] - y[i]
+    v2x, v2y = x[n2] - x[i] - 0.0, y[n2] - y[i] - 0.0
+    l1 = hypot(v1x, v1y); l2 = hypot(v2x, v2y)
+    if l1 == 0 || l2 == 0
+        return 180.0  # treat as a hard bend for safety
+    end
+    dot12 = clamp((v1x*v2x + v1y*v2y) / (l1*l2), -1.0, 1.0)
+    θ = acosd(dot12)                 # 0..180 (interior)
+    abs(180.0 - θ)                   # deviation from straight
+end
+
+# Build adjacency
+function _adjacency(N::Int, edges::Vector{Tuple{Int,Int}})
+    nbrs = [Int[] for _ in 1:N]
+    @inbounds for (u,v) in edges
+        push!(nbrs[u], v)
+        push!(nbrs[v], u)
+    end
+    nbrs
+end
+
+# Classify nodes
+function classify_backbone_nodes(x::AbstractVector, y::AbstractVector,
+                                 edges::Vector{Tuple{Int,Int}};
+                                 turn_thresh_deg::Real = 15)
+    N = length(x)
+    nbrs = _adjacency(N, edges)
+    deg = [length(nbrs[i]) for i in 1:N]
+    roles = fill(:isolated, N)
+
+    @inbounds for i in 1:N
+        if deg[i] == 0
+            roles[i] = :isolated
+        elseif deg[i] == 1
+            roles[i] = :leaf
+        elseif deg[i] >= 3
+            roles[i] = :junction
+        else
+            # deg == 2 → turning vs interim
+            dev = _turn_deviation_deg(i, x, y, nbrs)
+            roles[i] = (dev >= turn_thresh_deg) ? :turning : :interim_straight
+        end
+    end
+
+    return roles, deg, nbrs
+end
+
+using KernelDensity, Plots
+
+# -----------------------------
+# Utilities
+# -----------------------------
+# replace your density_curve with this:
+
+function density_curve(data; label="", xlabel="", npts=512)
+    # accept (xs, ys) or (idxs, vals) tuples by taking the 2nd thing,
+    # otherwise assume it's a vector of numbers
+    if data isa Tuple && length(data) == 2
+        data = data[2]
+    end
+    d = collect(skipmissing(data))           # materialize: no SkipMissing iter
+    isempty(d) && return plot(title="(no data)"; legend=false)
+
+    kd = kde(d)                              # avoid npoints kw to dodge MethodError
+    plot(kd.x, kd.density; seriestype=:path, lw=2,
+         label=label, xlabel=xlabel, ylabel="density", legend=:topright)
+end
+
+
+# 2) Segment length
+segment_length(x, y, seg::Vector{Int}) = sum(hypot(x[seg[i+1]]-x[seg[i]], y[seg[i+1]]-y[seg[i]]) for i in 1:length(seg)-1)
+
+# 3) Angle deviation from straight (180°) at a triple (a,b,c)
+@inline function turn_dev_deg(ax,ay,bx,by,cx,cy)
+    v1x, v1y = ax-bx, ay-by
+    v2x, v2y = cx-bx, cy-by
+    l1 = hypot(v1x,v1y); l2 = hypot(v2x,v2y)
+    (l1==0 || l2==0) && return 180.0
+    cosθ = clamp((v1x*v2x + v1y*v2y)/(l1*l2), -1.0, 1.0)
+    θ = acosd(cosθ)              # 0..180
+    abs(180.0 - θ)               # deviation from straight
+end
+
+# 4) Per-segment curvature stats: (total_turn, mean_turn, curvature_density)
+function segment_curvature_stats(x, y, seg::Vector{Int})
+    n = length(seg)
+    if n < 3
+        return (0.0, 0.0, 0.0)
+    end
+    devs = Float64[]
+    @inbounds for i in 2:n-1
+        a, b, c = seg[i-1], seg[i], seg[i+1]
+        push!(devs, turn_dev_deg(x[a],y[a], x[b],y[b], x[c],y[c]))
+    end
+    total = sum(devs) * (π/180)  # convert deg -> rad for totals
+    meanv = mean(devs) * (π/180)
+    len   = segment_length(x,y,seg)
+    dens  = (len > 0 ? total/len : 0.0)  # rad / unit length
+    return (total, meanv, dens)
+end
+
+# -----------------------------
+# Graph-wide features
+# -----------------------------
+# B) Turning-angle deviations across the whole graph (degree-2 interior turns)
+function graph_turn_deviation_deg(x, y, edges::Vector{Tuple{Int,Int}})
+    N = length(x)
+    nbrs = [Int[] for _ in 1:N]
+    @inbounds for (u,v) in edges
+        push!(nbrs[u], v); push!(nbrs[v], u)
+    end
+    devs = Float64[]
+    @inbounds for b in 1:N
+        if length(nbrs[b]) == 2
+            a, c = nbrs[b][1], nbrs[b][2]
+            push!(devs, turn_dev_deg(x[a],y[a], x[b],y[b], x[c],y[c]))
+        end
+    end
+    return devs
+end
+
+# C) Per-segment curvature density vector
+function per_segment_curvature_density(x,y, segments)
+    curv_stats = [segment_curvature_stats(x,y,seg) for seg in segments]
+    getindex.(curv_stats, 3)  # dens
+end
+
+"""
+    segment_lengths(x, y, segments) -> Vector{Float64}
+
+Compute the Euclidean length of each segment.
+- `x`, `y`: node coordinates
+- `segments`: list of node-index sequences (each segment is a polyline)
+
+Returns a vector of lengths (one per segment).
+"""
+function segment_lengths(x::AbstractVector, y::AbstractVector,
+                         segments::Vector{Vector{Int}})
+    lengths = Float64[]
+    for seg in segments
+        L = 0.0
+        for i in 1:length(seg)-1
+            dx = x[seg[i+1]] - x[seg[i]]
+            dy = y[seg[i+1]] - y[seg[i]]
+            L += hypot(dx, dy)
+        end
+        push!(lengths, L)
+    end
+    return lengths
+end
+
+
+
+# -----------------------------
+# Plotters (smooth curves)
+# -----------------------------
+plot_segment_length_density(x, y, segments) = begin
+    lens = segment_lengths_safe(x, y, segments)
+    plt  = density_curve(lens; label="segment length", xlabel="length (plot units)")
+    return lens, plt
+end
+
+# keep this (vector-of-edges style):
+plot_turning_angle_density(x, y, edges) =
+    density_curve(graph_turn_deviation_deg(x, y, edges);
+                  label="turning angle dev.", xlabel="degrees")
+
+# add this overload (vector-of-devs style):
+plot_turning_angle_density(devs::AbstractVector) =
+    density_curve(devs; label="turning angle dev.", xlabel="degrees")
+
+plot_curvature_density(x,y, segments) =
+    density_curve(per_segment_curvature_density(x,y,segments); label="curvature density", xlabel="rad / unit length")
+
+function normalize_edges!(edges::Vector{Tuple{Int,Int}})
+    @inbounds for k in eachindex(edges)
+        u,v = edges[k]
+        u == v && error("self-loop at $(u)")
+        edges[k] = (min(u,v), max(u,v))
+    end
+    unique!(edges)
+    return edges
+end
+
+# keep at top-level near your other helpers
+function _dedup_run(seg::Vector{Int})
+    out = Int[]
+    last = typemin(Int)
+    @inbounds for i in seg
+        if i != last
+            push!(out, i); last = i
+        end
+    end
+    out
+end
+
+function segment_lengths_safe(x::AbstractVector, y::AbstractVector,
+                              segments::Vector{Vector{Int}}; min_len=1e-9)
+    lens = Float64[]
+    @inbounds for seg in segments
+        s = _dedup_run(seg)
+        if length(s) ≥ 2
+            L = 0.0
+            for k in 1:length(s)-1
+                i, j = s[k], s[k+1]
+                L += hypot(x[j]-x[i], y[j]-y[i])
+            end
+            (isfinite(L) && L > min_len) && push!(lens, L)
+        end
+    end
+    return lens
+end
+
 
 # -------------------------
 # Main LOD plotter
@@ -765,6 +1044,7 @@ function plot_monomers_lod(
 
     # 1) transform once
     xT, yT, s = transform_coords(x, y; mode=mode, scale=scale, target_max=target_max)
+    normalize_edges!(edges)  # NEW
 
     # 2) physical units → chosen display unit
     x_nm = xT .* real_scale_nm
@@ -839,13 +1119,13 @@ function plot_monomers_lod(
 
     # 7) plot
     plt = nothing
-    println("i'm here")
-    println(lod)
-    println(N)
-    if lod == :massive
-        println("plotting massive")
-        # Base figure with axes/ticks, no monomer markers
+    if lod == :massive        # Base figure with axes/ticks, no monomer markers
         plt = plot(
+            aspect_ratio=:equal, legend=false, dpi=dpi, size=figsize,
+            xlim=xlim, ylim=ylim, xticks=xtick_vals, yticks=ytick_vals,
+            grid=false
+        )
+        plt_backbone = plot(
             aspect_ratio=:equal, legend=false, dpi=dpi, size=figsize,
             xlim=xlim, ylim=ylim, xticks=xtick_vals, yticks=ytick_vals,
             grid=false
@@ -865,6 +1145,51 @@ function plot_monomers_lod(
             savefig(plt, save_path)
             println("Plot saved to: $save_path")
         end
+        
+        draw_backbone_with_roles!(plt_backbone, xT, yT, edges;
+            turn_thresh_deg = 30.0,
+        )
+        display(plt)
+        display(plt_backbone)
+        out_dir = joinpath(pwd(), "plots", "tmp")
+
+        if save_path !== nothing
+            savefig(plt_backbone, out_dir*"\\bb.png")
+            println("Plot saved to: $save_path")
+        end
+
+        # segments, endpoints, junctions = segments_from_backbone(xT, yT, edges)
+        segments, endpoints, junctions = segments_from_backbone_cc(xT, yT, edges)
+
+        seg_lengths, plt_len = plot_segment_length_density(xT, yT, segments)
+        plt_turn = plot_turning_angle_density(xT, yT, edges)
+        plt_curv = plot_curvature_density(xT, yT, segments)
+        # Compute in nanometers
+        lens_nm = segment_lengths_safe(x_nm, y_nm, segments)
+
+
+        # KDE bandwidth tuned for nm
+        kd = kde(lens_nm; bandwidth=1.5)
+        mask = kd.x .>= 0.0
+        
+        plt_len = plot(kd.x[mask], kd.density[mask];
+            xlabel="length (nm)", ylabel="density",
+            title="Segment length distribution (KDE)",
+            lw=2, color=:blue, legend=false)
+        histogram!(lens_nm, normalize=true, alpha=0.3, bins=50, color=:blue)
+
+
+        display(plt_len)
+        println("max segment length: $(maximum(lens_nm)) nm")
+
+        # optional save
+        savefig(plt_len, replace(save_path, ".png" => "_seglen_kde.png"))
+
+        savefig(plt_turn, replace(save_path, ".png" => "_turn_kde.png"))
+        savefig(plt_curv, replace(save_path, ".png" => "_curvdens_kde.png"))
+
+
+
         return plt
 
     else
@@ -931,7 +1256,6 @@ function plot_monomers_lod(
             # A) Segment length: smooth density
             seg_lengths, plt_len = plot_segment_length_density(
                 xT, yT, feat.segments;
-                save_path = (save_path === nothing ? nothing : replace(save_path, ".png" => "_seglen_density.png"))
             )
 
             # D) Turning angles: smooth density (graph-based)
