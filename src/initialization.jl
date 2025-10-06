@@ -131,7 +131,7 @@ function initialize_simulation(config::Config)
     # Return initialized state
     return SimulationState(
         x_coords, y_coords, rotation,
-        NN, radius, 20,  # last_to_check
+        NN, radius, 40,  # last_to_check
         NNrestriction, boxNum, boxList,
         boxCap, boxSize, MN, W, K,
         Tuple{Int,Int}[],   # edges: start empty

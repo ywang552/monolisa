@@ -990,6 +990,108 @@ function segment_lengths_safe(x::AbstractVector, y::AbstractVector,
 end
 
 
+# --- convenience: run face-finder on arbitrary x,y without touching state ---
+# Requires the Faces module we wrote earlier to be in scope.
+struct XYEdges
+    x_coords::Vector{Float64}
+    y_coords::Vector{Float64}
+    edges::Vector{Tuple{Int,Int}}
+end
+
+compute_enclosed_faces_xy(x::AbstractVector{<:Real},
+                          y::AbstractVector{<:Real},
+                          edges::Vector{Tuple{Int,Int}};
+                          area_floor::Float64=0.0,
+                          drop_outer::Bool=true,
+                          normalize_orientation::Bool=true,
+                          return_abs::Bool=true) =
+    Faces.compute_enclosed_faces(XYEdges(collect(x), collect(y), edges);
+        area_floor=area_floor,
+        drop_outer=drop_outer,
+        normalize_orientation=normalize_orientation,
+        return_abs=return_abs)
+
+# --- plot faces onto an existing Plots.jl plot ---
+function draw_faces_on!(plt, x::AbstractVector{<:Real}, y::AbstractVector{<:Real},
+                        edges::Vector{Tuple{Int,Int}};
+                        inputstate = nothing,
+                        min_area::Float64 = 5.0,    # filter tiny faces by |area|
+                        max_faces::Int = 5_000,     # cap draw count for speed
+                        face_alpha::Float64 = 0.35,
+                        outline_color = :gray20,
+                        outline_lw::Real = 0.5,
+                        color_by::Symbol = :area,   # :area or :uniform
+                        show_labels::Bool = false,
+                        label_fontsize::Int = 7)
+
+
+    println(typeof(inputstate))
+    res = Faces.compute_enclosed_faces(inputstate; area_floor=min_area, drop_outer=true)
+
+    faces = res.faces
+    areas = res.areas                   # already abs if return_abs=true
+    println(length(areas))
+    # keep faces by area and limit count
+    keep = findall(a -> a ≥ min_area, areas)
+    isempty(keep) && return plt
+    ord = sort(keep; by=i->areas[i], rev=true)
+    ord = ord[1:min(length(ord), max_faces)]
+
+    # min-max normalize areas for coloring
+    amin, amax = extrema(areas[ord]); rng = max(amax-amin, eps())
+
+    # centroid helper for labels
+    function poly_centroid(vs::Vector{Int})
+        n = length(vs)
+        acc = 0.0; cx = 0.0; cy = 0.0
+        @inbounds for i in 1:n
+            j = (i == n) ? 1 : i+1
+            xi, yi = x[vs[i]], y[vs[i]]
+            xj, yj = x[vs[j]], y[vs[j]]
+            cr = xi*yj - xj*yi
+            acc += cr
+            cx += (xi + xj) * cr
+            cy += (yi + yj) * cr
+        end
+        if abs(acc) < 1e-15
+            return (mean(x[vs]), mean(y[vs]))
+        else
+            acc2 = acc * 3.0
+            return (cx/acc2, cy/acc2)
+        end
+    end
+
+    for i in ord
+        vs = faces[i]
+        xs = x[vs]; ys = y[vs]
+
+        # color
+        c = :dodgerblue
+        if color_by === :area
+            t = (areas[i]-amin)/rng
+            # simple two-stop blue gradient
+            r = (1-t)*0.8 + t*0.0
+            g = (1-t)*0.9 + t*0.2
+            b = (1-t)*1.0 + t*0.8
+            c = RGB(1,0,0)
+        elseif color_by === :uniform
+            c = RGBA(0.2,0.6,0.9,1.0)
+        end
+
+        # filled polygon (close it)
+        plot!(plt, vcat(xs, xs[1]), vcat(ys, ys[1]);
+              seriestype=:shape, fillalpha=face_alpha, fillcolor=c,
+              linecolor=outline_color, lw=outline_lw)
+
+        if show_labels
+            cx, cy = poly_centroid(vs)
+            annotate!(plt, (cx, cy, text(string(round(areas[i]; digits=2)), label_fontsize, :black)))
+        end
+    end
+    return plt
+end
+
+
 # -------------------------
 # Main LOD plotter
 # -------------------------
@@ -1004,6 +1106,7 @@ Features:
 """
 function plot_monomers_lod(
     x::AbstractVector, y::AbstractVector;
+    inputstate = nothing,
     rotation::Union{AbstractVector,Nothing}=nothing,
     boxSize::Union{Real,Nothing}=nothing,
     monomer_radius::Union{Nothing,Real}=nothing,
@@ -1119,8 +1222,14 @@ function plot_monomers_lod(
 
     # 7) plot
     plt = nothing
+    plt2 = nothing 
     if lod == :massive        # Base figure with axes/ticks, no monomer markers
         plt = plot(
+            aspect_ratio=:equal, legend=false, dpi=dpi, size=figsize,
+            xlim=xlim, ylim=ylim, xticks=xtick_vals, yticks=ytick_vals,
+            grid=false
+        )
+        plt2 = plot(
             aspect_ratio=:equal, legend=false, dpi=dpi, size=figsize,
             xlim=xlim, ylim=ylim, xticks=xtick_vals, yticks=ytick_vals,
             grid=false
@@ -1138,14 +1247,48 @@ function plot_monomers_lod(
             @warn "plot_monomers_lod: edges not provided; massive mode wants precomputed backbone"
         end
 
+        # overlay faces on the SAME transformed coords
+        draw_faces_on!(plt, xT, yT, edges;
+            inputstate = inputstate,
+            min_area = 1.0,       # tune to your scale to hide slivers
+            max_faces = 3000,      # keep plots responsive
+            face_alpha =1.0,
+            color_by = :area,
+            show_labels = false
+        )
+
+
+        for cid in sort(collect(keys(backbones)))
+            path = backbones[cid]
+            isempty(path) && continue
+
+            if length(path) >= 2
+                # polyline for this island
+                plot!(plt2, xT[path], yT[path], lw=0.7, alpha=0.95, label = "island $cid")
+                # endpoints
+                scatter!(plt2, [xT[first(path)]], [yT[first(path)]], ms=.5, label="")
+                scatter!(plt2, [xT[last(path)]],  [yT[last(path)]],  ms=.5, label="")
+            else
+                # singleton island (no edges) — draw a dot
+                # scatter!(plt, [xT[path[1]]], [yT[path[1]]], ms=.5, label = "island $cid (singleton)")
+            end
+        end
+
         # skip the rest of the body for massive mode
         xlabel!(plt, "Distance ($(unit_label(u)))")
         ylabel!(plt, "Distance ($(unit_label(u)))")
         if save_path !== nothing
-            savefig(plt, save_path)
+            save_path_strand   = replace(save_path, "placement" => "strand")
+            save_path_backbone = replace(save_path, "placement" => "backbone")
+
+            savefig(plt, save_path_strand)
+            savefig(plt2, save_path_backbone)
             println("Plot saved to: $save_path")
         end
         
+
+
+
         draw_backbone_with_roles!(plt_backbone, xT, yT, edges;
             turn_thresh_deg = 30.0,
         )
@@ -1505,6 +1648,7 @@ function generate_plots(state::AbstractState, config;
 
     plot_monomers_lod(
         x, y;
+        inputstate = state,
         rotation=rot,
         boxSize=box_size,
         monomer_radius=state.radius,     # in data units
@@ -1522,9 +1666,7 @@ function generate_plots(state::AbstractState, config;
         draw_contacts=true,
         contact_scale=1.02,
         contact_max_lines=min(200_000, 10 * length(x)),
-        # NEW
         show_contour=show_contour,
-        # show_contour = false,
         tm_style=tm_style,
         tm_len_frac=tm_len_frac,
         tm_inset_frac=tm_inset_frac,
