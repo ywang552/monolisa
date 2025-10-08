@@ -320,7 +320,7 @@ function plot_face_area_cdf(res; logx::Bool=false, min_area::Float64=0.0,
     if logx
         # Avoid log(0): shift the minimum > 0 slightly if needed
         xmin = maximum([minimum(cdf.x), nextfloat(0.0)])
-        plot!(plt, cdf.x, cdf.y_count; xscale=:log10, label="Count-CDF $(label)", lw=2)
+        plot!(plt, cdf.x, cdf.y_count; xscale=:log10, label="$(label)", lw=2)
         # plot!(plt, cdf.x, cdf.y_area;  xscale=:log10, label="Area-share CDF", lw=2, ls=:dash)
         xlims!(1e0, 1e5)
     else

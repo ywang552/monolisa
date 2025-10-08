@@ -123,6 +123,8 @@ function initialize_simulation(config::Config)
     boxNum[Int(xsp / boxSize) + 1, Int(ysp / boxSize) + 1] = 1
     push!(x_coords, xsp)
     push!(y_coords, ysp)
+    @info "initialize_simulation: using W from" config.file_path
+    @assert isfile(config.file_path) "Missing W file: $(config.file_path)"
 
     # Load and preprocess W matrix
     W = load_w_matrix(file_path)

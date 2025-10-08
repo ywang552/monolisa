@@ -597,10 +597,9 @@ Arguments:
 Returns:
 - The final SimulationState.
 """
-function run(fn; log_path=pwd()*"/"*"logs/", save_path=pwd()*"/"*"saved_states/minimal_states/")
+function F(config; log_path=pwd()*"/"*"logs/", save_path=pwd()*"/"*"saved_states/minimal_states/")
     # Initialize simulation state
     state = initialize_simulation(config)
-
     cc = 0
     boix = 1
     num_monomers = state.MN
