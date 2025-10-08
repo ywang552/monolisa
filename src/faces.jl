@@ -330,15 +330,15 @@ function plot_face_area_cdf(res; logx::Bool=false, min_area::Float64=0.0,
     return plt
 end
 
-# res = Faces.compute_enclosed_faces(state; drop_outer=true, normalize_orientation=true, return_abs=true)
-res = Faces.compute_enclosed_faces(state; area_floor=5., drop_outer=true)
+# # res = Faces.compute_enclosed_faces(state; drop_outer=true, normalize_orientation=true, return_abs=true)
+# res = Faces.compute_enclosed_faces(state; area_floor=5., drop_outer=true)
 
 
 
-plt_cdf = plot_face_area_cdf(res; logx=true, min_area=5.0,
-    title="Face-size CDFs")
+# plt_cdf = plot_face_area_cdf(res; logx=true, min_area=5.0,
+#     title="Face-size CDFs")
 
-res2 = Faces.compute_enclosed_faces(state2; area_floor=5., drop_outer=true)
-plot_face_area_cdf(res2; logx = true, p = plt_cdf, min_area=5.0, label = "8C")
+# res2 = Faces.compute_enclosed_faces(state2; area_floor=5., drop_outer=true)
+# plot_face_area_cdf(res2; logx = true, p = plt_cdf, min_area=5.0, label = "8C")
 
-savefig("plots\\tmp\\faceCDF.png")
+# savefig("plots\\tmp\\faceCDF.png")

@@ -551,4 +551,4 @@ function longest_geodesic(adj, w, x, y, comp::Vector{Int})
     end
     return bestP
 end
-backbones = compute_backbone(state)
+# backbones = compute_backbone(state)

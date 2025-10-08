@@ -12,7 +12,8 @@ include("simulation.jl")
 include("utils.jl")
 include("plot_results.jl")
 include("structure_analysis.jl")
-
+include("longest_strand.jl")
+include("faces.jl")
 
 
 """
@@ -41,7 +42,7 @@ config = Config(
     box_capacity=10,
     monomer_radius=1,
     grid_size=2000,
-    max_monomers=50000,
+    max_monomers=1000,
     # max_monomers=100,
     # file_path=ARGS[1],
     file_path="Claudins/8Cpop_grids.txt",
@@ -111,7 +112,7 @@ end
 safe_stamp() = Dates.format(now(), "yyyymmdd-HHMMSS-sss")
 stamp = safe_stamp()
 
-state2 = main()
+state = main()
 
 
 # ms = create_minimal_state(state)
@@ -121,18 +122,18 @@ state2 = main()
 
 
 # # print(length(state.x_coords))
-# out_dir = joinpath(pwd(), "plots", "tmp")
-# mkpath(out_dir)
+out_dir = joinpath(pwd(), "plots", "tmp")
+mkpath(out_dir)
 
-# name_noext, _ = splitext(basename(config.file_path))
-# prefix = joinpath(out_dir, name_noext*"_123")
-# overlay_path = prefix * "overlay_curvature.png"
-println(typeof(state2))
-state2.edges
-state.edges
-backbones = compute_backbone(state2; λ=0.6, mode=:geodesic)
-generate_plots(state2, config; output_prefix = prefix*"arcs_$(stamp)", show_contour=true, tm_style=:nothing)
-state2
+name_noext, _ = splitext(basename(config.file_path))
+prefix = joinpath(out_dir, name_noext*"_123")
+overlay_path = prefix * "overlay_curvature.png"
+# println(typeof(state2))
+# state2.edges
+# state.edges
+backbones = compute_backbone(state; λ=0.6, mode=:geodesic)
+generate_plots(state, config; bbs = backbones, output_prefix = prefix*"arcs_$(stamp)", show_contour=true, tm_style=:nothing)
+# state2
 
 # x = state.x_coords
 # y = state.y_coords;

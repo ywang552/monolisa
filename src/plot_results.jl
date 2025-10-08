@@ -1106,6 +1106,7 @@ Features:
 """
 function plot_monomers_lod(
     x::AbstractVector, y::AbstractVector;
+    backbones = nothing,
     inputstate = nothing,
     rotation::Union{AbstractVector,Nothing}=nothing,
     boxSize::Union{Real,Nothing}=nothing,
@@ -1636,7 +1637,8 @@ function generate_plots(state::AbstractState, config;
                         tm_len_frac::Real=0.35,
                         tm_inset_frac::Real=0.10,
                         tm_lw::Union{Real,Symbol}=:auto,
-                        tm_size_frac::Real=0.28)
+                        tm_size_frac::Real=0.28,
+                        bbs = nothing)
     x = state.x_coords
     y = state.y_coords
     rot = hasproperty(state, :rotation) ? state.rotation : nothing
@@ -1648,6 +1650,7 @@ function generate_plots(state::AbstractState, config;
 
     plot_monomers_lod(
         x, y;
+        backbones = bbs,
         inputstate = state,
         rotation=rot,
         boxSize=box_size,
