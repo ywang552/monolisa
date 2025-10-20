@@ -301,7 +301,7 @@ plot_face_area_cdf(res; logx=false, min_area=0.0, title="Face-size CDFs")
 - y ∈ [0,1]; x = face area (optionally log-scaled).
 """
 function plot_face_area_cdf(res; logx::Bool=false, min_area::Float64=0.0,
-                            title::AbstractString="Face-size CDFs", label = "C2sep", p = nothing)
+                            title::AbstractString="Face-size CDFs", label = "C2sep", p = nothing, c = :red)
     cdf = face_cdfs(res; min_area=min_area)
     if isempty(cdf.x)
         @warn "No faces after filtering (min_area=$(min_area))."
@@ -309,7 +309,7 @@ function plot_face_area_cdf(res; logx::Bool=false, min_area::Float64=0.0,
     end
 
     if isnothing(p)
-        plt = plot(; legend=:bottomright, xlabel="Face area (nm²)",
+        plt = plot(; legend=:bottomright, xlabel="Mesh area (nm²)",
                    ylabel="Cumulative fraction", ylims=(0,1),
                    aspect_ratio=:auto, title=title, grid=true)
     else
@@ -320,9 +320,10 @@ function plot_face_area_cdf(res; logx::Bool=false, min_area::Float64=0.0,
     if logx
         # Avoid log(0): shift the minimum > 0 slightly if needed
         xmin = maximum([minimum(cdf.x), nextfloat(0.0)])
-        plot!(plt, cdf.x, cdf.y_count; xscale=:log10, label="$(label)", lw=2)
+        plot!(plt, cdf.x, cdf.y_count; color = c, xscale=:log10, label="$(label)", lw=2)
         # plot!(plt, cdf.x, cdf.y_area;  xscale=:log10, label="Area-share CDF", lw=2, ls=:dash)
         xlims!(1e0, 1e5)
+        
     else
         plot!(plt, cdf.x, cdf.y_count; label="Count-CDF", lw=2)
         plot!(plt, cdf.x, cdf.y_area;  label="Area-share CDF", lw=2, ls=:dash)
