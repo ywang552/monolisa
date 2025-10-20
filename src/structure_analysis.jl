@@ -1,7 +1,4 @@
-using Graphs
-using Random
-using Plots
-using Colors: RGB
+
 
 """
 segments_from_backbone(x, y, edges)
@@ -214,7 +211,6 @@ function graph_turn_deviation_deg(x::AbstractVector, y::AbstractVector,
     return idxs, devs
 end
 
-using StatsBase
 
 # Plot and/or return segment length stats
 function plot_segment_length_hist(x, y, segments; nbins::Int=30, save_path::Union{Nothing,String}=nothing)

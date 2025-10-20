@@ -6,7 +6,6 @@
 # --- small helpers ---
 const INF = typemax(Float64) / 4
 
-using DataStructures: DisjointSets, union!, find_root!
 
 
 @inline function euclid_len(x::Vector{Float64}, y::Vector{Float64}, u::Int, v::Int)
@@ -145,7 +144,6 @@ function components_from_edges(adj::Vector{Vector{Int}})
 end
 
 # --- PC1 extremes on a set of nodes ---
-using LinearAlgebra
 function pc1_extremes(nodes::Vector{Int}, x::Vector{Float64}, y::Vector{Float64})
     m = length(nodes)
     μx = sum(x[n] for n in nodes) / m

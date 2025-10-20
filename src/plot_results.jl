@@ -2,9 +2,7 @@
 # Monomer Plotting (units + spin tick)
 ############################
 
-using Plots
-using Plots: Shape
-using StatsBase
+
 
 # -------------------------
 # Config: physical mapping
@@ -33,10 +31,6 @@ function draw_edges!(plt, x::AbstractVector, y::AbstractVector,
     return plt
 end
 
-using Graphs
-using Plots
-using Random
-using Colors: RGB
 
 # --- f1: features from x,y,edges ---------------------------------------------
 
@@ -823,7 +817,6 @@ function classify_backbone_nodes(x::AbstractVector, y::AbstractVector,
     return roles, deg, nbrs
 end
 
-using KernelDensity, Plots
 
 # -----------------------------
 # Utilities
@@ -1574,10 +1567,6 @@ function plot_monomers_lod(
 end
 
 
-
-
-using Plots
-
 function plot_W_vs_K_max(W::AbstractMatrix, K::AbstractMatrix;
                          add_angle_ticks::Bool=true,
                          save_path::Union{Nothing,String}=nothing)
@@ -1627,7 +1616,6 @@ end
 # -------------------------
 # Public entry that uses state/config
 # -------------------------
-using Base.Filesystem: basename
 
 function generate_plots(state::AbstractState, config;
                         output_prefix="plots/tmp/",
