@@ -3,7 +3,7 @@ logs/
 
 # Saved states
 saved_states/
-
+large_strand/
 # Temporary job files
 *.temp
 

@@ -597,116 +597,326 @@ Arguments:
 Returns:
 - The final SimulationState.
 """
-function F(config; log_path=pwd()*"/"*"logs/", save_path=pwd()*"/"*"saved_states/minimal_states/")
-    # Initialize simulation state
+# function F(config; log_path=pwd()*"/"*"logs/", save_path=pwd()*"/"*"saved_states/minimal_states/")
+#     # Initialize simulation state
+#     state = initialize_simulation(config)
+#     cc = 0
+#     boix = 1
+#     num_monomers = state.MN
+
+#     log_path = log_path*"$(basename(config.file_path)[1:end-4]).log"
+#     log_message(log_path, "Simulation started at: $(Dates.now())")
+#     log_message(log_path, "Configuration: $(config)")
+
+#     # Ensure the save folder exists
+#     log_dir = dirname(log_path)
+#     save_dir = dirname(save_path)
+#     if !isdir(save_dir)
+#         mkdir(save_dir)
+#         println("Created save directory: $save_dir")
+#         println("Created log directory: $log_dir")
+#     end
+
+#     # Set up progress bar
+#     p = Progress(num_monomers, desc="Simulating Monomers", dt = config.prog)
+
+#     try
+#         while length(state.x_coords) < num_monomers
+#             rs = add_monomer(state, config, boix)
+
+#             if length(rs) == 3
+#                 x, boix, npos = rs[1], rs[2], rs[3]
+#             else
+#                 x, boix = rs[1], rs[2]
+#                 npos = -1
+#             end
+    
+#             if x
+#                 cc = 0
+#                 ProgressMeter.next!(p)
+#             else
+#                 if boix == -1
+#                     state.error_dic[1] += 1
+#                     println("Break at ", size(state.x_coords, 1))
+#                     break
+#                 end
+#                 if boix == -2
+#                     cc += 1
+#                     state.error_dic[2] += 1
+#                 elseif boix == -3
+#                     state.error_dic[3] += 1
+#                 else
+#                     cc += 1
+#                     state.error_dic[4] += 1
+#                 end
+#             end
+    
+#             if x && (cc + 1) % 50 == 0
+#                 println(size(state.x_coords, 1))
+#                 println(state.error_dic)
+#             end
+
+    
+#             if cc > 10000
+#                 println("strand stalled (cc=$(cc)); seeding a new far mini-strand…")
+#                 placed_seed = seed_new_strand_far!(
+#                     state, config;
+#                     L = state.last_to_check,      # e.g., 15 from your snippet
+#                     dmin = 2., dmax = 4.,
+#                     tries = 500, per_node_fail = 2000
+#                 )
+#                 if placed_seed > 0
+#                     # keep anchoring within THIS new strand first
+#                     state.last_to_check = min(state.last_to_check, placed_seed)
+#                     cc = 0
+#                     continue   # resume the SAME loop; normal growth takes over
+#                 else
+#                     println("no room to seed new mini-strand; breaking.")
+#                     break
+#                 end
+#             end
+
+#             if x && size(state.x_coords, 1) % 5000 == 0
+#                 println("Placed ", size(state.x_coords, 1), " monomers")
+#             end
+#         end
+#     catch e
+#         threshold = 10  # Example: Minimum 3 monomers per grid region
+#         # state = remove_small_islands!(state, threshold)
+#         placed_monomer_number = length(state.x_coords)
+#         pn = "$(placed_monomer_number)_$(basename(config.file_path)[1:end-4])"
+#         # Save the current state as MinimalState on error
+#         println("Error occurred: ", e)
+#         log_message(log_path, "ERROR at $(Dates.now()): $e")
+#         minimal_state = create_minimal_state(state)
+#         save_minimal_state(save_path*"$(pn).jld2", minimal_state)
+#         println("Minimal state saved after error.")
+#         rethrow(e)  # Re-throw the error after saving
+#     finally
+#         threshold = 5  # Example: Minimum 3 monomers per grid region
+#         # state = remove_small_islands!(state, threshold)
+#         placed_monomer_number = length(state.x_coords)
+#         pn = "$(placed_monomer_number)_$(basename(config.file_path)[1:end-4])"
+#         # Save final results as MinimalState
+#         minimal_state = create_minimal_state(state)
+#         log_message(log_path, "Simulation completed at: $(Dates.now())")
+#         save_minimal_state(save_path*"$(pn).jld2", minimal_state)
+#         println("Final minimal state saved.")
+#         # ProgressMeter.finish!(p)
+#     end
+
+#     println("Simulation complete!")
+#     return state
+# end
+
+function F(config; log_path = joinpath(pwd(), "logs"),
+                 save_path = joinpath(pwd(), "saved_states", "minimal_states"))
+
+    # ===== Safenet knobs (tune as you like) =====
+    target             = config.max_monomers
+    stall_soft         = 5_000           # try local reseed after this many consecutive fails
+    stall_hard         = 20_000          # escalate to far reseed/backoff
+    max_global_plateau = 200_000         # last-ditch widen loop before admitting defeat
+    reseed_tries       = 4               # how many far reseed attempts per escalation
+    backoff_base       = (dmin=2.0, dmax=4.0)
+    backoff_growth     = 1.5             # grow window on each escalation
+    fatal_err_cap      = 5               # consecutive exceptions allowed
+
+    # checkpoint cadence
+    N_save       = 10_000                # save every N placements
+    T_save_sec   = 300.0                 # or every 5 minutes
+    last_save_ts = time()
+
+    # ===== Init =====
+    mkpath(save_path)
+    mkpath(log_path)
+
+    # derive filenames
+    base = basename(config.file_path)
+    stem = endswith(base, ".txt") ? base[1:end-4] : base
+    log_file = joinpath(log_path, "$(stem).log")
+
+    log_message(log_file, "Simulation started at: $(Dates.now())")
+    log_message(log_file, "Configuration: $(config)")
+
     state = initialize_simulation(config)
-    cc = 0
+    num_monomers = target
+
+    # progress
+    p = Progress(num_monomers, desc="Simulating Monomers", dt=config.prog)
+
+    # internal counters
+    stall_cc = 0                 # consecutive failures (no successful placement)
+    hard_plateau = 0             # total failures since last big recovery
+    fatal_errs = 0
     boix = 1
-    num_monomers = state.MN
 
-    log_path = log_path*"$(basename(config.file_path)[1:end-4]).log"
-    log_message(log_path, "Simulation started at: $(Dates.now())")
-    log_message(log_path, "Configuration: $(config)")
+    # backoff window
+    cur_dmin, cur_dmax = backoff_base
 
-    # Ensure the save folder exists
-    log_dir = dirname(log_path)
-    save_dir = dirname(save_path)
-    if !isdir(save_dir)
-        mkdir(save_dir)
-        println("Created save directory: $save_dir")
-        println("Created log directory: $log_dir")
+    # small helper: safe save checkpoint
+    function save_checkpoint!(state; tag="chkpt")
+        placed = length(state.x_coords)
+        pn = "$(placed)_$(stem)_$(tag)"
+        path = joinpath(save_path, pn * ".bin")
+
+        open(path, "w") do io
+            serialize(io, state)              # <-- FULL state
+        end
+
+        log_message(log_file,
+            "Checkpoint saved at $(Dates.now()) (placed=$(placed), tag=$(tag), file=$(path))")
     end
 
-    # Set up progress bar
-    p = Progress(num_monomers, desc="Simulating Monomers", dt = config.prog)
 
-    try
-        while length(state.x_coords) < num_monomers
-            rs = add_monomer(state, config, boix)
-
-            if length(rs) == 3
-                x, boix, npos = rs[1], rs[2], rs[3]
-            else
-                x, boix = rs[1], rs[2]
-                npos = -1
-            end
-    
-            if x
-                cc = 0
-                ProgressMeter.next!(p)
-            else
-                if boix == -1
-                    state.error_dic[1] += 1
-                    println("Break at ", size(state.x_coords, 1))
-                    break
-                end
-                if boix == -2
-                    cc += 1
-                    state.error_dic[2] += 1
-                elseif boix == -3
-                    state.error_dic[3] += 1
-                else
-                    cc += 1
-                    state.error_dic[4] += 1
-                end
-            end
-    
-            if x && (cc + 1) % 50 == 0
-                println(size(state.x_coords, 1))
-                println(state.error_dic)
-            end
-
-    
-            if cc > 10000
-                println("strand stalled (cc=$(cc)); seeding a new far mini-strand…")
-                placed_seed = seed_new_strand_far!(
-                    state, config;
-                    L = state.last_to_check,      # e.g., 15 from your snippet
-                    dmin = 2., dmax = 4.,
-                    tries = 500, per_node_fail = 2000
-                )
-                if placed_seed > 0
-                    # keep anchoring within THIS new strand first
-                    state.last_to_check = min(state.last_to_check, placed_seed)
-                    cc = 0
-                    continue   # resume the SAME loop; normal growth takes over
-                else
-                    println("no room to seed new mini-strand; breaking.")
-                    break
-                end
-            end
-
-
-    
-            if x && size(state.x_coords, 1) % 5000 == 0
-                println("Placed ", size(state.x_coords, 1), " monomers")
+    # small helper: staged reseed attempts with backoff
+    function staged_reseed!(state, config; tries=reseed_tries, dmin=cur_dmin, dmax=cur_dmax)
+        placed_seed = 0
+        for t in 1:tries
+            placed_seed = seed_new_strand_far!(
+                state, config;
+                L = state.last_to_check,
+                dmin = dmin, dmax = dmax,
+                tries = 1_000,           # be generous on search
+                per_node_fail = 5_000
+            )
+            if placed_seed > 0
+                state.last_to_check = min(state.last_to_check, placed_seed)
+                return true
             end
         end
-    catch e
-        threshold = 10  # Example: Minimum 3 monomers per grid region
-        # state = remove_small_islands!(state, threshold)
-        placed_monomer_number = length(state.x_coords)
-        pn = "$(placed_monomer_number)_$(basename(config.file_path)[1:end-4])"
-        # Save the current state as MinimalState on error
-        println("Error occurred: ", e)
-        log_message(log_path, "ERROR at $(Dates.now()): $e")
-        minimal_state = create_minimal_state(state)
-        save_minimal_state(save_path*"$(pn).jld2", minimal_state)
-        println("Minimal state saved after error.")
-        rethrow(e)  # Re-throw the error after saving
-    finally
-        threshold = 5  # Example: Minimum 3 monomers per grid region
-        # state = remove_small_islands!(state, threshold)
-        placed_monomer_number = length(state.x_coords)
-        pn = "$(placed_monomer_number)_$(basename(config.file_path)[1:end-4])"
-        # Save final results as MinimalState
-        minimal_state = create_minimal_state(state)
-        log_message(log_path, "Simulation completed at: $(Dates.now())")
-        save_minimal_state(save_path*"$(pn).jld2", minimal_state)
-        println("Final minimal state saved.")
-        # ProgressMeter.finish!(p)
+        return false
     end
 
-    println("Simulation complete!")
+    # ===== Main growth loop =====
+    try
+        while length(state.x_coords) < num_monomers
+            # periodic autosave (by count or time)
+            if (length(state.x_coords) % N_save == 0 && length(state.x_coords) > 0) ||
+               (time() - last_save_ts >= T_save_sec)
+                save_checkpoint!(state; tag="auto")
+                last_save_ts = time()
+            end
+
+            # try to add one monomer
+            rs = add_monomer(state, config, boix)
+
+            # unpack result signature
+            x::Bool = rs[1]
+            boix    = rs[2]
+            npos    = (length(rs) == 3) ? rs[3] : -1
+
+            if x
+                stall_cc = 0
+                hard_plateau = 0
+                ProgressMeter.next!(p)
+                if length(state.x_coords) % 5_000 == 0
+                    println("Placed ", length(state.x_coords), " monomers")
+                    println("Errors: ", state.error_dic)
+                end
+                continue
+            end
+
+            # failure paths
+            if boix == -1
+                # previously: break (no room)
+                # now: try staged recovery before giving up
+                state.error_dic[1] += 1
+                log_message(log_file, "boix=-1 encountered at $(length(state.x_coords)); attempting staged reseed…")
+
+                # 1) local reseed with current window
+                ok = staged_reseed!(state, config; dmin=cur_dmin, dmax=cur_dmax)
+                if ok; stall_cc = 0; continue; end
+
+                # 2) widen window and try again
+                cur_dmin *= backoff_growth
+                cur_dmax *= backoff_growth
+                ok = staged_reseed!(state, config; dmin=cur_dmin, dmax=cur_dmax)
+                if ok; stall_cc = 0; continue; end
+
+                # 3) last-ditch: big window
+                ok = staged_reseed!(state, config; dmin=cur_dmin*2, dmax=cur_dmax*2)
+                if ok; stall_cc = 0; continue; end
+
+                # If all fail, consider this a hard plateau step and keep looping until we exceed cap
+                hard_plateau += 1_000
+                if hard_plateau >= max_global_plateau
+                    log_message(log_file, "Global plateau exceeded; saving and exiting loop.")
+                    save_checkpoint!(state; tag="plateau")
+                    break
+                end
+
+            elseif boix == -2
+                stall_cc += 1
+                state.error_dic[2] += 1
+
+            elseif boix == -3
+                state.error_dic[3] += 1
+                stall_cc += 1
+            else
+                state.error_dic[4] += 1
+                stall_cc += 1
+            end
+
+            # stall watchdogs
+            if stall_cc >= stall_soft
+                # Try a local reseed (no backoff change)
+                ok = staged_reseed!(state, config; dmin=cur_dmin, dmax=cur_dmax)
+                if ok
+                    log_message(log_file, "Recovered from soft stall via local reseed.")
+                    stall_cc = 0
+                    continue
+                end
+            end
+
+            if stall_cc >= stall_hard
+                # escalate: widen window and try multiple reseeds
+                cur_dmin *= backoff_growth
+                cur_dmax *= backoff_growth
+                ok = staged_reseed!(state, config; dmin=cur_dmin, dmax=cur_dmax)
+                if ok
+                    log_message(log_file, "Recovered from hard stall via widened reseed (dmin=$(cur_dmin), dmax=$(cur_dmax)).")
+                    stall_cc = 0
+                    continue
+                end
+
+                # if still stuck, record plateau (keeps loop alive but lets us exit eventually)
+                hard_plateau += stall_cc
+                stall_cc = 0
+                if hard_plateau >= max_global_plateau
+                    log_message(log_file, "Global plateau exceeded after hard stalls; saving and exiting loop.")
+                    save_checkpoint!(state; tag="plateau")
+                    break
+                end
+            end
+        end
+
+    catch e
+        fatal_errs += 1
+        println("Error occurred: ", e)
+        log_message(log_file, "ERROR at $(Dates.now()): $e")
+        save_checkpoint!(state; tag="error$(fatal_errs)")
+        # do NOT rethrow; try to continue unless too many fatal errors
+        if fatal_errs < fatal_err_cap
+            @warn "Recovering from exception (attempt $fatal_errs of $fatal_err_cap) and continuing…"
+            retry  # implicit by falling through to while; nothing special needed
+        else
+            @error "Too many fatal errors; exiting loop."
+        end
+
+    finally
+        placed = length(state.x_coords)
+        pn = "$(placed)_$(stem)"
+        minimal_state = create_minimal_state(state)
+        log_message(log_file, "Simulation completed at: $(Dates.now()) (placed=$(placed))")
+        save_checkpoint!(state, tag = "final")
+        try
+            ProgressMeter.finish!(p)
+        catch
+            # ignore if already finished
+        end
+    end
+
+    println("Simulation complete! placed=$(length(state.x_coords)) / target=$(target)")
     return state
 end

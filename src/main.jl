@@ -35,29 +35,53 @@ end
 
 # setup_project_folders()
 
-# config = Config(
-#     ft=0.0005,
-#     box_size=10,
-#     nn_restriction=3,
-#     box_capacity=10,
-#     monomer_radius=1,
-#     grid_size=2000,
-#     max_monomers=1000,
-#     # max_monomers=100,
-#     # file_path=ARGS[1],
-#     file_path="Claudins/wt2_newsep.txt",
-#     grid_overlay = false,
-#     prog = 1
-# )
+config = Config(
+    ft=0.0005,
+    box_size=10,
+    nn_restriction=3,
+    box_capacity=10,
+    monomer_radius=1,
+    grid_size=2000,
+    max_monomers=1000,
+    # max_monomers=100,
+    # file_path=ARGS[1],
+    file_path="Claudins/wt2_newsep.txt",
+    grid_overlay = false,
+    prog = 1
+)
 
-# function main()
-#     println("starting the placement...")
-#     # Pass configuration to simulation
-#     state = F(config)
+function main()
+    println("starting the placement...")
+    # Pass configuration to simulation
+    state = F(config, log_path = "large_strand\\logs\\", save_path = "large_strand\\placements\\")
 
-#     # Save results or generate plots
-#     return state
-# end
+    # Save results or generate plots
+    return state
+end
+
+
+safe_stamp() = Dates.format(now(), "yyyymmdd-HHMMSS-sss")
+stamp = safe_stamp()
+state = main();
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 # """
@@ -107,15 +131,7 @@ end
 # end
 
 
-
-
-# safe_stamp() = Dates.format(now(), "yyyymmdd-HHMMSS-sss")
-# stamp = safe_stamp()
-
-# state = main()
-
-
-# # # ms = create_minimal_state(state)
+# ms = create_minimal_state(state)
 # # # ms.edges
 # # # state.edges
 # # # state.last_to_check
