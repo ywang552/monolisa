@@ -4,6 +4,7 @@ logs/
 # Saved states
 saved_states/
 large_strand/
+slurm/
 # Temporary job files
 *.temp
 

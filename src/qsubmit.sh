@@ -8,8 +8,7 @@
 set -euo pipefail
 
 JULIA_EXEC=/home/ywang552/julia-1.9.1/bin/julia
-export OMP_NUM_THREADS=1
-export JULIA_NUM_THREADS=1
+
 
 echo ">>> MonoLisa start $(date)"
 
