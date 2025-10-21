@@ -5,6 +5,7 @@ logs/
 saved_states/
 large_strand/
 slurm/
+src/large_strand/
 # Temporary job files
 *.temp
 
