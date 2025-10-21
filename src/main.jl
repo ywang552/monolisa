@@ -54,7 +54,7 @@ config = Config(
 function main()
     println("starting the placement...")
     # Pass configuration to simulation
-    state = F(config, log_path = "large_strand\\logs\\", save_path = "large_strand\\placements\\")
+    state = F(config, log_path = pwd()*"large_strand\\logs\\", save_path = pwd()*"large_strand\\placements\\")
 
     # Save results or generate plots
     return state
