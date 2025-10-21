@@ -1235,8 +1235,11 @@ function plot_monomers_lod(
         )
 
         if edges !== nothing && !isempty(edges)
+            
             # draw backbone ONLY (no points) using transformed coords (xT,yT)
             _draw_edges_batched!(plt, xT, yT, edges; lw=0.7, alpha=0.85, color=:black)
+            # scatter!([x[1] for x in strand_starts], [x[2] for x in strand_starts]; m=:xcross, ms=6, mc=:red, label="strand starts")
+
         else
             @warn "plot_monomers_lod: edges not provided; massive mode wants precomputed backbone"
         end
@@ -1296,34 +1299,34 @@ function plot_monomers_lod(
         end
 
         # segments, endpoints, junctions = segments_from_backbone(xT, yT, edges)
-        segments, endpoints, junctions = segments_from_backbone_cc(xT, yT, edges)
+        # segments, endpoints, junctions = segments_from_backbone_cc(xT, yT, edges)
 
-        seg_lengths, plt_len = plot_segment_length_density(xT, yT, segments)
-        plt_turn = plot_turning_angle_density(xT, yT, edges)
-        plt_curv = plot_curvature_density(xT, yT, segments)
-        # Compute in nanometers
-        lens_nm = segment_lengths_safe(x_nm, y_nm, segments)
+        # seg_lengths, plt_len = plot_segment_length_density(xT, yT, segments)
+        # plt_turn = plot_turning_angle_density(xT, yT, edges)
+        # plt_curv = plot_curvature_density(xT, yT, segments)
+        # # Compute in nanometers
+        # lens_nm = segment_lengths_safe(x_nm, y_nm, segments)
 
 
-        # KDE bandwidth tuned for nm
-        kd = kde(lens_nm; bandwidth=1.5)
-        mask = kd.x .>= 0.0
+        # # KDE bandwidth tuned for nm
+        # kd = kde(lens_nm; bandwidth=1.5)
+        # mask = kd.x .>= 0.0
         
-        plt_len = plot(kd.x[mask], kd.density[mask];
-            xlabel="length (nm)", ylabel="density",
-            title="Segment length distribution (KDE)",
-            lw=2, color=:blue, legend=false)
-        histogram!(lens_nm, normalize=true, alpha=0.3, bins=50, color=:blue)
+        # plt_len = plot(kd.x[mask], kd.density[mask];
+        #     xlabel="length (nm)", ylabel="density",
+        #     title="Segment length distribution (KDE)",
+        #     lw=2, color=:blue, legend=false)
+        # histogram!(lens_nm, normalize=true, alpha=0.3, bins=50, color=:blue)
 
 
-        display(plt_len)
-        println("max segment length: $(maximum(lens_nm)) nm")
+        # display(plt_len)
+        # println("max segment length: $(maximum(lens_nm)) nm")
 
-        # optional save
-        savefig(plt_len, replace(save_path, ".png" => "_seglen_kde.png"))
+        # # optional save
+        # savefig(plt_len, replace(save_path, ".png" => "_seglen_kde.png"))
 
-        savefig(plt_turn, replace(save_path, ".png" => "_turn_kde.png"))
-        savefig(plt_curv, replace(save_path, ".png" => "_curvdens_kde.png"))
+        # savefig(plt_turn, replace(save_path, ".png" => "_turn_kde.png"))
+        # savefig(plt_curv, replace(save_path, ".png" => "_curvdens_kde.png"))
 
 
 
@@ -1374,8 +1377,8 @@ function plot_monomers_lod(
             draw_backbone!(plt_backbone, xT, yT, edges_back; lc=:black, lw=2, alpha=0.9)
 
             # DEGREE-BASED FEATURES (f1)
-            feat = backbone_features(xT, yT, edges_back)
-            compare_edges(state, edges)
+            # feat = backbone_features(xT, yT, edges_back)
+            # compare_edges(state, edges)
 
             # 💡 CURVATURE REFINEMENT (split at turning points)
             # 1) detect + split with looser params
@@ -1644,7 +1647,7 @@ function generate_plots(state::AbstractState, config;
         boxSize=box_size,
         monomer_radius=state.radius,     # in data units
         show_grid=overlay,
-        lod=:auto,
+        lod=:massive,
         tick_step=:auto,
         orient_every=1,
         mode=:min,

@@ -1,7 +1,9 @@
 #!/bin/bash
-#SBATCH -J MonoLisa
+#SBATCH -J MonoLisa_c4_7kp4
 #SBATCH -o /home/ywang552/monolisa/slurm/out/%x-%j.out
 #SBATCH -e /home/ywang552/monolisa/slurm/err/%x-%j.err
+#SBATCH --ntasks-per-node=1
+#SBATCH --nodes=1
 #SBATCH --cpus-per-task=1
 #SBATCH --partition=longjobs
 

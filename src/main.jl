@@ -8,11 +8,13 @@
 
 include("dependencies.jl")
 include("initialization.jl")
-include("simulation.jl")
+# include("simulation.jl")
+include("simulation_forced_flag.jl")
 include("utils.jl")
 include("plot_results.jl")
 include("structure_analysis.jl")
-include("longest_strand.jl")
+# include("longest_strand.jl")
+include("compute_backbone_fast.jl")
 include("faces.jl")
 
 
@@ -39,17 +41,16 @@ config = Config(
     ft=0.0005,
     box_size=10,
     nn_restriction=3,
-    box_capacity=10,
+    box_capacity=15,
     monomer_radius=1,
     grid_size=2000,
-    max_monomers=1000,
+    max_monomers=8000,
     # max_monomers=100,
     # file_path=ARGS[1],
     file_path="Claudins/wt2_newsep.txt",
     grid_overlay = false,
     prog = 1
 )
-
 function main()
     println("starting the placement...")
     # Pass configuration to simulation
@@ -64,19 +65,14 @@ safe_stamp() = Dates.format(now(), "yyyymmdd-HHMMSS-sss")
 stamp = safe_stamp()
 state = main();
 
+# state = deserialize("large_strand\\placements\\1000000_hc15AF_final.bin")
 
+backbones = compute_backbone(state; λ=0.6, mode=:geodesic)
 
-
-
-
-
-
-
-
-
-
-
-
+out_dir = joinpath(pwd(), "plots", "tmp")
+name_noext, _ = splitext(basename(config.file_path))
+prefix = joinpath(out_dir, name_noext*"_123")
+generate_plots(state, config; bbs = backbones, output_prefix = prefix*"arcs_$(stamp)", show_contour=true, tm_style=:nothing)
 
 
 

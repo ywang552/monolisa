@@ -46,4 +46,4 @@ function install_packages_from_dependencies(dependencies_file)
 end
 
 # Run the function with the path to your dependencies.jl file
-install_packages_from_dependencies(pwd()*"/src/dependencies.jl")
+install_packages_from_dependencies(pwd()*"/dependencies.jl")

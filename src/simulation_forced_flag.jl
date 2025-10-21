@@ -819,10 +819,10 @@ Returns:
 #     println("Simulation complete!")
 #     return state
 # end
+# strand_starts = Vector{Vector{Float64}}()
 
 function F(config; log_path = joinpath(pwd(), "logs"),
                  save_path = joinpath(pwd(), "saved_states", "minimal_states"))
-
     # ===== Safenet knobs (tune as you like) =====
     target             = config.max_monomers
     stall_soft         = 5_000           # try local reseed after this many consecutive fails
@@ -832,10 +832,12 @@ function F(config; log_path = joinpath(pwd(), "logs"),
     backoff_base       = (dmin=2.0, dmax=4.0)
     backoff_growth     = 1.5             # grow window on each escalation
     fatal_err_cap      = 5               # consecutive exceptions allowed
+    # --- Quota restart master switch (only controls periodic restarts; stall reseeds stay enabled)
+    force_restart = true
     # ---- Forced restart knobs ----
-    restart_budget           = 50        # total restarts allowed
-    min_growth_after_restart = 10        # must grow at least this many monomers before next restart
-    quota_restart_interval = 1_000   # force a new strand every 1000 placements
+    # restart_budget           = 50        # total restarts allowed
+    # min_growth_after_restart = 10        # must grow at least this many monomers before next restart
+    # quota_restart_interval = 1000   # force a new strand every 1000 placements
 
     # checkpoint cadence
     N_save       = 10_000                # save every N placements
@@ -855,6 +857,10 @@ function F(config; log_path = joinpath(pwd(), "logs"),
     log_message(log_file, "Configuration: $(config)")
 
     state = initialize_simulation(config)
+    # if !isempty(state.x_coords)
+    #     push!(strand_starts, [state.x_coords[1], state.y_coords[1]])
+    # end
+
     num_monomers = target
 
     # progress
@@ -902,6 +908,16 @@ function F(config; log_path = joinpath(pwd(), "logs"),
                 state.last_to_check = placed_seed
                 return placed_seed
             end
+            # if placed_seed > 0
+            #     # first index of the newly seeded strand
+            #     first_idx = length(state.x_coords) - placed_seed + 1
+            #     push!(strand_starts, [state.x_coords[first_idx], state.y_coords[first_idx]])
+
+            #     # HAND OFF growth to the new strand
+            #     state.last_to_check = placed_seed
+            #     return placed_seed
+            # end
+
         end
         return 0
     end
@@ -951,7 +967,6 @@ function F(config; log_path = joinpath(pwd(), "logs"),
                 end
 
                 # 2) widen window and try again
-                cur_dmin *= backoff_growth
                 cur_dmax *= backoff_growth
                 seed_cnt = staged_reseed!(state, config; dmin=cur_dmin, dmax=cur_dmax)
                 if seed_cnt > 0
@@ -962,32 +977,15 @@ function F(config; log_path = joinpath(pwd(), "logs"),
 
 
                 # 3) last-ditch: big window
-                ok = staged_reseed!(state, config; dmin=cur_dmin*2, dmax=cur_dmax*2)
-                if ok; stall_cc = 0; continue; end
+                seed_cnt = staged_reseed!(state, config; dmin=cur_dmin, dmax=cur_dmax)
+                if seed_cnt > 0
+                    boix = 1               # reset placement state after a reseed
+                    stall_cc = 0
+                    continue
+                end
 
                 # If all fail, consider this a hard plateau step and keep looping until we exceed cap
                 hard_plateau += 1_000
-                
-                placed_since = length(state.x_coords) - last_restart_MN
-                if placed_since >= quota_restart_interval
-                    log_message(log_file, "Quota restart at MN=$(length(state.x_coords)) (batch size=$(quota_restart_interval)).")
-                    seed_cnt = staged_reseed!(state, config; dmin=cur_dmin*2, dmax=cur_dmax*2)
-                    if seed_cnt > 0
-                        restarts += 1
-                        last_restart_MN = length(state.x_coords)
-                        boix = 1          # reset placement state
-                        stall_cc = 0
-                        hard_plateau = 0
-                        # IMPORTANT: hand growth to the new strand
-                        state.last_to_check = seed_cnt
-                        continue
-                    else
-                        log_message(log_file, "Quota restart failed to find space; continuing current strand.")
-                    end
-                end
-
-
-
                 if hard_plateau >= max_global_plateau
                     log_message(log_file, "Global plateau exceeded; saving and exiting loop.")
                     save_checkpoint!(state; tag="plateau")
@@ -1006,6 +1004,25 @@ function F(config; log_path = joinpath(pwd(), "logs"),
                 stall_cc += 1
             end
 
+            # placed_since = length(state.x_coords) - last_restart_MN
+            # if force_restart && placed_since >= quota_restart_interval
+            #     log_message(log_file, "Quota restart at MN=$(length(state.x_coords)) (batch size=$(quota_restart_interval)).")
+            #     seed_cnt = staged_reseed!(state, config; dmin=cur_dmin*2, dmax=cur_dmax*2)
+            #     if seed_cnt > 0
+            #         restarts += 1
+            #         last_restart_MN = length(state.x_coords)
+            #         boix = 1          # reset placement state
+            #         stall_cc = 0
+            #         hard_plateau = 0
+            #         # IMPORTANT: hand growth to the new strand
+            #         state.last_to_check = seed_cnt
+            #         continue
+            #     else
+            #         log_message(log_file, "Quota restart failed to find space; continuing current strand.")
+            #     end
+            # end
+
+            
             # stall watchdogs
             if stall_cc >= stall_soft
                 # Try a local reseed (no backoff change)

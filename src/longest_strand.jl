@@ -349,6 +349,107 @@ function backbone_for_component(adj, w, x, y, comp::Vector{Int}; λ::Float64=0.5
     return bestP
 end
 
+struct CSR
+    rowptr::Vector{Int}   # length = N+1
+    colind::Vector{Int}   # length = 2|E| (undirected)
+end
+
+"Build undirected CSR from 1-based edges and N (= state.MN)."
+function build_csr_undirected(N::Int, edges::Vector{Tuple{Int,Int}})
+    deg = zeros(Int, N)
+    @inbounds for (u,v) in edges
+        deg[u] += 1; deg[v] += 1
+    end
+    rowptr = Vector{Int}(undef, N+1)
+    rowptr[1] = 1
+    @inbounds for i in 1:N
+        rowptr[i+1] = rowptr[i] + deg[i]
+    end
+    colind = Vector{Int}(undef, rowptr[end]-1)
+    fill!(deg, 0) # reuse as cursors
+    @inbounds for (u,v) in edges
+        pu = rowptr[u] + deg[u]; colind[pu] = v; deg[u] += 1
+        pv = rowptr[v] + deg[v]; colind[pv] = u; deg[v] += 1
+    end
+    return CSR(rowptr, colind)
+end
+
+@inline neighbors(csr::CSR, u::Int) = csr.rowptr[u]:(csr.rowptr[u+1]-1)
+
+mutable struct BFSWS
+    queue::Vector{Int}
+    parent::Vector{Int}   # 0 => no parent
+    dist::Vector{Int}     # -1 => unseen
+end
+
+init_bfs_ws(N::Int) = BFSWS(Vector{Int}(undef, N), fill(0,N), fill(-1,N))
+
+"Fast reset: only touched nodes are cleared."
+@inline function reset_ws!(ws::BFSWS, touched::Vector{Int})
+    @inbounds for v in touched
+        ws.parent[v] = 0
+        ws.dist[v] = -1
+    end
+    empty!(touched)
+end
+
+"Unweighted BFS confined to a component mask (BitVector) if provided."
+function bfs!(csr::CSR, ws::BFSWS, src::Int; touched::Vector{Int}, compmask::Union{Nothing,BitVector}=nothing)
+    q = ws.queue; parent = ws.parent; dist = ws.dist
+    head = 1; tail = 0
+
+    dist[src] = 0
+    push!(touched, src)
+    tail += 1; q[tail] = src
+
+    far = src
+    @inbounds while head <= tail
+        u = q[head]; head += 1
+        du = dist[u]
+        for k in neighbors(csr, u)
+            v = csr.colind[k]
+            if compmask !== nothing && !compmask[v]; continue; end
+            if dist[v] == -1
+                dist[v] = du + 1
+                parent[v] = u
+                push!(touched, v)
+                tail += 1; q[tail] = v
+                if dist[v] > dist[far]; far = v; end
+            end
+        end
+    end
+    return far
+end
+
+"Parent-based path reconstruction."
+function reconstruct_path(parent::Vector{Int}, s::Int, t::Int)
+    if s == 0 || t == 0; return Int[]; end
+    P = Int[]
+    v = t
+    while v != 0
+        push!(P, v)
+        v == s && break
+        v = parent[v]
+    end
+    reverse!(P)
+    return P
+end
+
+"Double-sweep geodesic confined to a component."
+function geodesic_path_on_comp(csr::CSR, ws::BFSWS, comp::Vector{Int})
+    if isempty(comp); return Int[]; end
+    compmask = falses(length(ws.parent))
+    @inbounds for v in comp; compmask[v] = true; end
+    touched = Int[]
+    a = bfs!(csr, ws, comp[1]; touched=touched, compmask=compmask)
+    reset_ws!(ws, touched)
+    b = bfs!(csr, ws, a; touched=touched, compmask=compmask)
+    P = reconstruct_path(ws.parent, a, b)
+    reset_ws!(ws, touched)
+    return P
+end
+
+
 """
     compute_backbone(state; λ=0.5, mode=:both, use_peel=true)
 
@@ -359,89 +460,80 @@ mode:
 use_peel controls whether turn-aware step peels to 2-core.
 """
 function compute_backbone(state; λ::Float64=0.5, mode=:both, use_peel::Bool=true)
-    x = state.x_coords; y = state.y_coords; edges = state.edges
-    adj, w = build_graph(state.x_coords, state.y_coords, state.edges, state.MN)
+    x = state.x_coords; y = state.y_coords
+    N = state.MN
+    # Build CSR once
+    csr = build_csr_undirected(N, state.edges)
 
-    comps   = components_all_nodes(state.MN, adj)
+    # Get components (reuse yours; or BFS-on-CSR if you prefer)
+    comps = components_all_nodes(N, csr)  # see NOTE below
 
+    # Preallocate one BFS workspace (or one per thread later)
+    ws = init_bfs_ws(N)
 
     result = Dict{Int, Vector{Int}}()
     for (i, comp) in enumerate(comps)
-        # 1) pure longest geodesic (no peel)
-        P_geo = longest_geodesic(adj, w, x, y, comp)
-
-        # 2) turn-aware (optionally peel)
-        if use_peel
-            # reuse your backbone_for_component (it peels)
-            P_turn = backbone_for_component(adj, w, x, y, comp; λ=λ)
-        else
-            # same as backbone_for_component but without peel: just candidates + turn-aware
-            pairs = candidate_pairs_farthest(adj, w, comp; K=8)
-            bestP = Int[]; bestScore = -Inf
-            for (s,t) in pairs
-                P = turn_aware_path(adj, w, x, y, s, t; λ=λ)
-                isempty(P) && continue
-                L = 0.0
-                @inbounds for k in 1:length(P)-1
-                    L += w[(P[k], P[k+1])]
-                end
-                bends = max(length(P)-2, 0)
-                score = L - 0.0*bends
-                if score > bestScore
-                    bestScore = score; bestP = P
-                end
-            end
-            P_turn = bestP
+        if length(comp) == 1
+            result[i] = comp
+            continue
         end
 
-        # 3) MST fallback
-        P_mst = mst_diameter(adj, w, x, y, comp)
+        # 1) Geodesic via double sweep (fast)
+        P_geo = geodesic_path_on_comp(csr, ws, comp)
 
-        # choose per mode
         if mode === :geodesic
-            result[i] = isempty(P_geo) ? (isempty(P_mst) ? comp[1:1] : P_mst) : P_geo
-        elseif mode === :turnaware
-            result[i] = isempty(P_turn) ? (isempty(P_mst) ? P_geo : P_mst) : P_turn
-        else
-            # pick the longer of the three
-            function plen(P)
-                s = 0.0
-                @inbounds for k in 1:length(P)-1; s += w[(P[k],P[k+1])]; end
-                return s
+            result[i] = isempty(P_geo) ? comp[1:1] : P_geo
+            continue
+        end
+
+        # 2) Optional: only try turn-aware if geodesic is "short"
+        P_turn = Int[]
+        if mode !== :geodesic
+            if !isempty(P_geo)
+                s = P_geo[1]; t = P_geo[end]
+                if use_peel
+                    P_turn = backbone_for_component_csr(csr, x, y, comp; λ=λ)
+                else
+                    P_turn = turn_aware_path_csr(csr, x, y, s, t, comp; λ=λ)
+                end
             end
-            candidates = [(P_geo, plen(P_geo)), (P_turn, plen(P_turn)), (P_mst, plen(P_mst))]
-            _, idx = findmax(t[2] for t in candidates)
-            result[i] = candidates[idx][1]
-            isempty(result[i]) && (result[i] = (length(comp) == 1 ? comp : longest_geodesic(adj, w, x, y, comp)))
+        end
+
+        if mode === :turnaware
+            result[i] = isempty(P_turn) ? (isempty(P_geo) ? comp[1:1] : P_geo) : P_turn
+            continue
+        end
+
+        # 3) :both — choose longer by hop-count (unweighted)
+        len_geo  = max(length(P_geo)-1, 0)
+        len_turn = max(length(P_turn)-1, 0)
+
+        if len_turn > len_geo && !isempty(P_turn)
+            result[i] = P_turn
+        else
+            result[i] = isempty(P_geo) ? comp[1:1] : P_geo
         end
     end
     return result
 end
 
 
-function components_all_nodes(MN::Int, adj::Vector{Vector{Int}})
-    seen = falses(MN)
+function components_all_nodes(N::Int, csr::CSR)
+    seen = falses(N)
+    ws = init_bfs_ws(N)
+    touched = Int[]
     comps = Vector{Vector{Int}}()
-    for s in 1:MN
-        if !seen[s]
-            if isempty(adj[s])
-                push!(comps, [s])           # singleton island
-                seen[s] = true
-            else
-                q = [s]; seen[s] = true
-                comp = Int[s]
-                while !isempty(q)
-                    u = pop!(q)
-                    for v in adj[u]
-                        if !seen[v]
-                            seen[v] = true
-                            push!(q, v); push!(comp, v)
-                        end
-                    end
-                end
-                push!(comps, comp)
-            end
+    for s in 1:N
+        seen[s] && continue
+        # BFS without mask, but capture nodes we touch
+        comp = Int[]
+        if ws.dist[s] != -1; reset_ws!(ws, touched); end
+        far = bfs!(csr, ws, s; touched=touched, compmask=nothing)
+        @inbounds for v in touched
+            push!(comp, v); seen[v] = true
         end
+        push!(comps, comp)
+        reset_ws!(ws, touched)
     end
     return comps
 end

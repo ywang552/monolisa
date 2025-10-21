@@ -16,9 +16,8 @@ using JLD2
 using ProgressMeter
 using FileIO
 using Base.Filesystem: basename
-using DataStructures: union!, find_root!
+using DataStructures: DisjointSets, union!, find_root!
 using LinearAlgebra
-
 using Printf
 using Dates
 using Graphs
