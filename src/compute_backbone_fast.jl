@@ -111,7 +111,7 @@ function build_csr_undirected(N::Int, edges::Vector{Tuple{Int,Int}})
 end
 
 @inline neighbors(csr::CSR, u::Int) = csr.rowptr[u]:(csr.rowptr[u+1]-1)
-
+@inline neighbor_vertices(g::Graphs.SimpleGraph, v::Int) = (@inbounds g.fadjlist[v])
 ###########################
 # BFS workspace + helpers #
 ###########################

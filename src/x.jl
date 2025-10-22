@@ -83,10 +83,9 @@ function plot_cdf_clusters_by_type(data_by_type::Dict{String,Vector};
     plt = plot(; xlabel="Mesh area (μm²)", ylabel=use_ccdf ? "CDF" : "CDF",
                xscale=:log10, legend=:bottomright, grid=true,
                title="Mesh-size CDFs by Claudin")
-
     for (cl, runs) in sort(collect(pertype_areas); by=first)
         col = get(colors, cl, get(Dict("C4"=>:red,"C2"=>:green,"C5"=>:blue,"C15"=>:orange), cl, :purple))
-
+        
         Ys = Float64[]
         counts = Int[]
         for A in runs
@@ -102,14 +101,15 @@ function plot_cdf_clusters_by_type(data_by_type::Dict{String,Vector};
         μ = mapslices(mean, Y; dims=2)[:]
         σ = mapslices(std,  Y; dims=2)[:]
         plot!(plt, xgrid_area, μ; color=col, lw=3, label=cl, ribbon=σ, fillalpha=0.15)
+        # plot!(plt, xgrid_area, σ; color=col, alpha=0.25, lw=1, label = false)
     end
-            plot!(plt, xgrid_area, y; color=col, alpha=0.25, lw=1, label = false)
 
     if focus_top !== nothing
         ylims!(plt, focus_top...)
     else
         ylims!(plt, 0, 1)
     end
+
     return plt
 end
 
@@ -205,43 +205,20 @@ end
 
 
 # ------------------ RUN IT ------------------
-# Folder with your .bin states
-data_dir = "data"
-
-# Customize how filenames map to claudin labels, if needed
-patterns = Dict(
-    # "C4" => "C4",
-    # "C2" => "C2",
-    "hc5AF" => "C5",
-    "wt2_newsep" => "C2",
-    "hc15" => "C15",
-    "c4_7" => "C4",
-
-    # add more keys if filenames use other hints, e.g. "claudin4" => "C4"
-)
-area_floor  = 8.
-groups = load_states_grouped(data_dir; patterns=patterns)
-# pgrid = plot_histograms_grid(data_dir, patterns; area_floor=10., nbins=60, density=false)
-ps = plot_histograms_by_claudin(data_dir, patterns, density = false, area_floor = area_floor)
 
 
-for p in keys(ps)
-    savefig(ps[p], "figs\\cdf\\$(p)_frequency_$(area_floor).png")
-end 
+# labels = ["C2","C4","C5","C15"]
+# xs, ys, cols = String[], Vector{Vector{Float64}}(), Symbol[]
 
-# patterns = Dict("hc5AF"=>"C5","wt2_newsep"=>"C2","hc15"=>"C15","c4_7"=>"C4")
+# for lab in labels
+#     A = collect_areas_for_claudin(data_dir, patterns, lab; area_floor=100.)
+#     isempty(A) && continue
+#     push!(xs, lab)
+#     push!(ys, A)
+#     push!(cols, get(TRUE_COLORS, lab, :gray))
+# end
 
 
-labels = ["C2","C4","C5","C15"]
-xs, ys, cols = String[], Vector{Vector{Float64}}(), Symbol[]
-
-for lab in labels
-    A = collect_areas_for_claudin(data_dir, patterns, lab; area_floor=100.)
-    isempty(A) && continue
-    push!(xs, lab)
-    push!(ys, A)
-    push!(cols, get(TRUE_COLORS, lab, :gray))
-end
 
 # using DataFrames, CSV
 # p = [fill("C2", length(ys[1])), fill("C4", length(ys[2])), fill("C5", length(ys[3])), fill("C15", length(ys[4]))]
@@ -285,23 +262,3 @@ end
 #     savefig(ps[v], "figs\\cdf\\$(v)_histogram_density.png")
 # end 
 
-# plt = plot_cdf_clusters_by_type(groups;
-#     colors=Dict("C4"=>:red, "C2"=>:green),
-#     area_floor=8.2,
-#     use_ccdf=true,
-#     focus_top=(0.7, 1.0),
-# )[1]
-
-# display(plt)
-# # savefig(plt, "figs/cdf/Focus Top.png")
-
-
-# plt = plot_cdf_clusters_by_type(groups;
-#     colors=Dict("C4"=>:red, "C2"=>:green),
-#     area_floor=8.2,
-#     use_ccdf=true,
-#     focus_top=(0.0, 1.0), 
-# )[1]
-
-# plot_hist_by_type(groups)
-# savefig(plt, "figs/cdf/Full.png")

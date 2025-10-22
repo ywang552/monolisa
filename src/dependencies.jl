@@ -22,6 +22,7 @@ using Printf
 using Dates
 using Graphs
 using KernelDensity
+using Dates, SHA
 
 
 # Other libraries (if applicable)

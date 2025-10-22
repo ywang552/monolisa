@@ -16,8 +16,8 @@ include("structure_analysis.jl")
 # include("longest_strand.jl")
 include("compute_backbone_fast.jl")
 include("faces.jl")
-
-
+include("x.jl")
+include("y.jl")
 """
 Sets up the necessary folders for the project.
 Creates folders if they do not already exist.
@@ -36,7 +36,7 @@ function setup_project_folders()
 end
 
 # setup_project_folders()
-
+fn = "wt2_newsep"
 config = Config(
     ft=0.0005,
     box_size=10,
@@ -47,7 +47,7 @@ config = Config(
     max_monomers=8000,
     # max_monomers=100,
     # file_path=ARGS[1],
-    file_path="Claudins/wt2_newsep.txt",
+    file_path="Claudins/$(fn).txt",
     grid_overlay = false,
     prog = 1
 )
@@ -61,22 +61,82 @@ function main()
 end
 
 
-safe_stamp() = Dates.format(now(), "yyyymmdd-HHMMSS-sss")
+
+"Return a short, filesystem-safe hash timestamp."
+@inline function safe_stamp()
+    t = string(Dates.now())
+    h = bytes2hex(sha1(t))
+    return h[1:10]     # 10-char hash prefix, plenty unique per second
+end
+
 stamp = safe_stamp()
-state = main();
-# state = deserialize("large_strand\\placements\\1000000_hc15AF_final.bin")
+# # state = main();
+state = deserialize("large_strand\\placements\\8000_wt2_newsep_final.bin")
 
-# backbones = compute_backbone(state; λ=0.6, mode=:geodesic)
-
-# out_dir = joinpath(pwd(), "plots", "tmp")
-# name_noext, _ = splitext(basename(config.file_path))
-# prefix = joinpath(out_dir, name_noext*"_123")
-# generate_plots(state, config; bbs = backbones, output_prefix = prefix*"arcs_$(stamp)", show_contour=true, tm_style=:nothing)
-
-
-
+backbones = compute_backbone(state; λ=0.6, mode=:geodesic)
+out_dir = joinpath(joinpath("plots", fn))
+if !ispath(out_dir)
+    mkdir(out_dir)
+end 
+prefix = joinpath(out_dir, fn)
+generate_plots(state, config; bbs = backbones, output_prefix = prefix*"_$(stamp)", show_contour=true, tm_style=:nothing)
 
 
+
+
+
+
+# Folder with your .bin states
+data_dir = joinpath("large_strand","placements")
+# Customize how filenames map to claudin labels, if needed
+patterns = Dict(
+    # "C4" => "C4",
+    # "C2" => "C2",
+    "hc5AF" => "C5",
+    "wt2_newsep" => "C2",
+    "hc15" => "C15",
+    "c4_7" => "C4",
+
+    # add more keys if filenames use other hints, e.g. "claudin4" => "C4"
+)
+
+out_dir = joinpath("plots", "cdf")
+if !ispath(out_dir)
+    mkdir(out_dir)
+end 
+area_floor  = 8.
+groups = load_states_grouped(data_dir; patterns=patterns)
+
+plots_hist = plot_hist_longest_by_type(groups; λ=0.6, mode=:geodesic, density=true)
+ps = plot_histograms_by_claudin(data_dir, patterns, density = false, area_floor = area_floor)
+
+for p in keys(ps)
+    local prefix = joinpath(out_dir, "$(p)")
+    savefig(ps[p], "$(prefix)_MeshAreaHistogram.png")
+    savefig(plots_hist[p], "$(prefix)_LongestStrandHistogram.png")
+end 
+
+plt = plot_cdf_clusters_by_type(groups;
+    colors=TRUE_COLORS,
+    area_floor=8.2,
+    use_ccdf=true,
+    focus_top=(0.7, 1.0),
+)
+prefix = joinpath(out_dir, "mesh_area_cdf_zoomed.png")
+savefig(plt, prefix)
+
+plt = plot_cdf_clusters_by_type(groups;
+    colors=TRUE_COLORS,
+    area_floor=8.2,
+    use_ccdf=true,
+    focus_top=(0.0, 1.0), 
+)
+prefix = joinpath(out_dir, "mesh_area_cdf.png")
+savefig(plt, prefix)
+plt_cdf = plot_cdf_longest_by_type(groups; λ=0.6, mode=:geodesic, use_ccdf=false)
+
+prefix = joinpath(out_dir, "longest_strand_cdf.png")
+savefig(plt_cdf, prefix)
 
 
 # """

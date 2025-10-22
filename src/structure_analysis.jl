@@ -23,7 +23,7 @@ function segments_from_backbone(x::AbstractVector{<:Real},
     is_vertex = [deg[v] ≠ 2 for v in 1:N]   # endpoints or junctions
 
     # materialize neighbors for fast indexed access
-    adj = [collect(neighbors(g, v)) for v in 1:N]
+    adj = [collect(neighbor_vertices(g, v)) for v in 1:N]
 
     # track undirected edges we’ve already traversed
     visited = Set{Tuple{Int,Int}}()

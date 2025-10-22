@@ -2,8 +2,6 @@
 # Monomer Plotting (units + spin tick)
 ############################
 
-
-
 # -------------------------
 # Config: physical mapping
 # -------------------------
@@ -1228,11 +1226,11 @@ function plot_monomers_lod(
             xlim=xlim, ylim=ylim, xticks=xtick_vals, yticks=ytick_vals,
             grid=false
         )
-        plt_backbone = plot(
-            aspect_ratio=:equal, legend=false, dpi=dpi, size=figsize,
-            xlim=xlim, ylim=ylim, xticks=xtick_vals, yticks=ytick_vals,
-            grid=false
-        )
+        # plt_backbone = plot(
+        #     aspect_ratio=:equal, legend=false, dpi=dpi, size=figsize,
+        #     xlim=xlim, ylim=ylim, xticks=xtick_vals, yticks=ytick_vals,
+        #     grid=false
+        # )
 
         if edges !== nothing && !isempty(edges)
             
@@ -1275,58 +1273,59 @@ function plot_monomers_lod(
         xlabel!(plt, "Distance ($(unit_label(u)))")
         ylabel!(plt, "Distance ($(unit_label(u)))")
         if save_path !== nothing
-            save_path_strand   = replace(save_path, "placement" => "strand")
-            save_path_backbone = replace(save_path, "placement" => "backbone")
-
+            save_path_strand   = replace(save_path, ".png" => "strand.png")
+            save_path_backbone = replace(save_path, ".png" => "backbone.png")
+            # save_path_strand = save_path*"placement.png"
+            # save_path_backbone = save_path*"backbone.png"
             savefig(plt, save_path_strand)
             savefig(plt2, save_path_backbone)
             println("Plot saved to: $save_path")
         end
         
+        # draw_backbone_with_roles!(plt_backbone, xT, yT, edges;
+        #     turn_thresh_deg = 30.0,
+        # )
 
-
-
-        draw_backbone_with_roles!(plt_backbone, xT, yT, edges;
-            turn_thresh_deg = 30.0,
-        )
-        display(plt)
-        display(plt_backbone)
-        out_dir = joinpath(pwd(), "plots", "tmp")
-
-        if save_path !== nothing
-            savefig(plt_backbone, out_dir*"\\bb.png")
-            println("Plot saved to: $save_path")
-        end
+        # if save_path !== nothing
+        #     savefig(plt_backbone, save_path*"_backbone.png")
+        #     println("Plot saved to: $save_path"*"_backbone.png")
+        # end
 
         # segments, endpoints, junctions = segments_from_backbone(xT, yT, edges)
         # segments, endpoints, junctions = segments_from_backbone_cc(xT, yT, edges)
 
-        # seg_lengths, plt_len = plot_segment_length_density(xT, yT, segments)
-        # plt_turn = plot_turning_angle_density(xT, yT, edges)
-        # plt_curv = plot_curvature_density(xT, yT, segments)
-        # # Compute in nanometers
-        # lens_nm = segment_lengths_safe(x_nm, y_nm, segments)
+        # edges = edges_from_csr_npz("adj.npz"; undirected=true, assume_upper=true)
+
+        segments, endpoints, junctions = segments_from_backbone(xT, yT, inputstate.edges)
+        segments, endpoints, junctions = segments_from_backbone_cc(xT, yT, inputstate.edges)
+        plt_turn = plot_turning_angle_density(xT, yT, inputstate.edges)
 
 
-        # # KDE bandwidth tuned for nm
-        # kd = kde(lens_nm; bandwidth=1.5)
-        # mask = kd.x .>= 0.0
+        seg_lengths, plt_len = plot_segment_length_density(xT, yT, segments)
+        plt_turn = plot_turning_angle_density(xT, yT, inputstate.edges)
+        plt_curv = plot_curvature_density(xT, yT, segments)
+        # Compute in nanometers
+        lens_nm = segment_lengths_safe(x_nm, y_nm, segments)
+
+
+        # KDE bandwidth tuned for nm
+        kd = kde(lens_nm; bandwidth=1.5)
+        mask = kd.x .>= 0.0
         
-        # plt_len = plot(kd.x[mask], kd.density[mask];
-        #     xlabel="length (nm)", ylabel="density",
-        #     title="Segment length distribution (KDE)",
-        #     lw=2, color=:blue, legend=false)
-        # histogram!(lens_nm, normalize=true, alpha=0.3, bins=50, color=:blue)
+        plt_len = plot(kd.x[mask], kd.density[mask];
+            xlabel="length (nm)", ylabel="density",
+            title="Segment length distribution (KDE)",
+            lw=2, color=:blue, legend=false)
+        histogram!(lens_nm, normalize=true, alpha=0.3, bins=50, color=:blue)
 
 
-        # display(plt_len)
-        # println("max segment length: $(maximum(lens_nm)) nm")
+        println("max segment length: $(maximum(lens_nm)) nm")
 
-        # # optional save
-        # savefig(plt_len, replace(save_path, ".png" => "_seglen_kde.png"))
+        # optional save
+        savefig(plt_len, replace(save_path, ".png" => "_seglen_kde.png"))
 
-        # savefig(plt_turn, replace(save_path, ".png" => "_turn_kde.png"))
-        # savefig(plt_curv, replace(save_path, ".png" => "_curvdens_kde.png"))
+        savefig(plt_turn, replace(save_path, ".png" => "_turn_kde.png"))
+        savefig(plt_curv, replace(save_path, ".png" => "_curvdens_kde.png"))
 
 
 
@@ -1635,9 +1634,8 @@ function generate_plots(state::AbstractState, config;
     rot = hasproperty(state, :rotation) ? state.rotation : nothing
     box_size = state.box_size
     overlay = getfield(config, :grid_overlay)  # avoids getproperty overload surprises
-    file_name = basename(config.file_path)
     N = length(x)
-    monomer_path = "$(output_prefix)_$(N)_$(file_name)_placement.png"
+    monomer_path = "$(output_prefix)_$(N)_.png"
 
     plot_monomers_lod(
         x, y;
