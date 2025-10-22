@@ -840,8 +840,8 @@ function F(config; log_path = joinpath(pwd(), "logs"),
     # quota_restart_interval = 1000   # force a new strand every 1000 placements
 
     # checkpoint cadence
-    # N_save       = 500_000                # save every N placements
-    N_save = 100
+    # N_save = 100
+    N_save       = 500_000                # save every N placements
     T_save_sec   = 7200.                 # or every 5 minutes
     last_save_ts = time()
 
