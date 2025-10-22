@@ -932,7 +932,6 @@ function F(config; log_path = joinpath(pwd(), "logs"),
             last_save_ts = time()
         end
         try
-            asd
             # try to add one monomer
             rs = add_monomer(state, config, boix)
 
