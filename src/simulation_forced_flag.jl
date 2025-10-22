@@ -1042,7 +1042,7 @@ function F(config; log_path = joinpath(pwd(), "logs"),
             fatal_errs += 1
             println("Error occurred: ", e)
             log_message(log_file, "ERROR at $(Dates.now()): $e")
-            save_checkpoint!(state; tag="error$(fatal_errs)")
+            # save_checkpoint!(state; tag="error$(fatal_errs)")
             # do NOT rethrow; try to continue unless too many fatal errors
             if fatal_errs < fatal_err_cap
                 @warn "Recovering from exception (attempt $fatal_errs of $fatal_err_cap) and continuing…"

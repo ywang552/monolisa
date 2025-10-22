@@ -74,7 +74,7 @@ state = main(;s = stamp);
 # state = deserialize("large_strand\\placements\\8000_wt2_newsep_final.bin")
 
 backbones = compute_backbone(state; λ=0.6, mode=:geodesic)
-out_dir = joinpath(joinpath("plots", fn))
+out_dir = joinpath("plots", fn)
 if !ispath(out_dir)
     mkdir(out_dir)
 end 
