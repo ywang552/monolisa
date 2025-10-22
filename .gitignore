@@ -2,11 +2,7 @@
 logs/
 
 # Saved states
-src/main2.jl
-src/main3.jl
-src/main4.jl
-src/single_submit.sh
-src/job_template.sh
+src/HPC/
 
 saved_states/
 large_strand/
