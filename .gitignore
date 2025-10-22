@@ -3,6 +3,9 @@ logs/
 
 # Saved states
 src/main2.jl
+src/main3.jl
+src/main4.jl
+
 saved_states/
 large_strand/
 slurm/
