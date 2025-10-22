@@ -67,12 +67,12 @@ state = main();
 
 # state = deserialize("large_strand\\placements\\1000000_hc15AF_final.bin")
 
-backbones = compute_backbone(state; λ=0.6, mode=:geodesic)
+# backbones = compute_backbone(state; λ=0.6, mode=:geodesic)
 
-out_dir = joinpath(pwd(), "plots", "tmp")
-name_noext, _ = splitext(basename(config.file_path))
-prefix = joinpath(out_dir, name_noext*"_123")
-generate_plots(state, config; bbs = backbones, output_prefix = prefix*"arcs_$(stamp)", show_contour=true, tm_style=:nothing)
+# out_dir = joinpath(pwd(), "plots", "tmp")
+# name_noext, _ = splitext(basename(config.file_path))
+# prefix = joinpath(out_dir, name_noext*"_123")
+# generate_plots(state, config; bbs = backbones, output_prefix = prefix*"arcs_$(stamp)", show_contour=true, tm_style=:nothing)
 
 
 

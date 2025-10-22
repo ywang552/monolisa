@@ -833,15 +833,15 @@ function F(config; log_path = joinpath(pwd(), "logs"),
     backoff_growth     = 1.5             # grow window on each escalation
     fatal_err_cap      = 5               # consecutive exceptions allowed
     # --- Quota restart master switch (only controls periodic restarts; stall reseeds stay enabled)
-    force_restart = true
+    # force_restart = false
     # ---- Forced restart knobs ----
     # restart_budget           = 50        # total restarts allowed
     # min_growth_after_restart = 10        # must grow at least this many monomers before next restart
     # quota_restart_interval = 1000   # force a new strand every 1000 placements
 
     # checkpoint cadence
-    N_save       = 10_000                # save every N placements
-    T_save_sec   = 300.0                 # or every 5 minutes
+    N_save       = 100_000                # save every N placements
+    T_save_sec   = 1800.                 # or every 5 minutes
     last_save_ts = time()
 
     # ===== Init =====
@@ -923,15 +923,16 @@ function F(config; log_path = joinpath(pwd(), "logs"),
     end
 
     # ===== Main growth loop =====
-    try
-        while length(state.x_coords) < num_monomers
-            # periodic autosave (by count or time)
-            if (length(state.x_coords) % N_save == 0 && length(state.x_coords) > 0) ||
-               (time() - last_save_ts >= T_save_sec)
-                save_checkpoint!(state; tag="auto")
-                last_save_ts = time()
-            end
-
+    
+    while length(state.x_coords) < num_monomers
+        # periodic autosave (by count or time)
+        if (length(state.x_coords) % N_save == 0 && length(state.x_coords) > 0) ||
+            (time() - last_save_ts >= T_save_sec)
+            save_checkpoint!(state; tag="auto")
+            last_save_ts = time()
+        end
+        try
+            asd
             # try to add one monomer
             rs = add_monomer(state, config, boix)
 
@@ -944,7 +945,7 @@ function F(config; log_path = joinpath(pwd(), "logs"),
                 stall_cc = 0
                 hard_plateau = 0
                 ProgressMeter.next!(p)
-                if length(state.x_coords) % 5_000 == 0
+                if length(state.x_coords) % N_save == 0
                     println("Placed ", length(state.x_coords), " monomers")
                     println("Errors: ", state.error_dic)
                 end
@@ -983,7 +984,7 @@ function F(config; log_path = joinpath(pwd(), "logs"),
                     stall_cc = 0
                     continue
                 end
-
+                    
                 # If all fail, consider this a hard plateau step and keep looping until we exceed cap
                 hard_plateau += 1_000
                 if hard_plateau >= max_global_plateau
@@ -1003,25 +1004,6 @@ function F(config; log_path = joinpath(pwd(), "logs"),
                 state.error_dic[4] += 1
                 stall_cc += 1
             end
-
-            # placed_since = length(state.x_coords) - last_restart_MN
-            # if force_restart && placed_since >= quota_restart_interval
-            #     log_message(log_file, "Quota restart at MN=$(length(state.x_coords)) (batch size=$(quota_restart_interval)).")
-            #     seed_cnt = staged_reseed!(state, config; dmin=cur_dmin*2, dmax=cur_dmax*2)
-            #     if seed_cnt > 0
-            #         restarts += 1
-            #         last_restart_MN = length(state.x_coords)
-            #         boix = 1          # reset placement state
-            #         stall_cc = 0
-            #         hard_plateau = 0
-            #         # IMPORTANT: hand growth to the new strand
-            #         state.last_to_check = seed_cnt
-            #         continue
-            #     else
-            #         log_message(log_file, "Quota restart failed to find space; continuing current strand.")
-            #     end
-            # end
-
             
             # stall watchdogs
             if stall_cc >= stall_soft
@@ -1054,34 +1036,35 @@ function F(config; log_path = joinpath(pwd(), "logs"),
                     break
                 end
             end
+        
+
+        catch e
+            fatal_errs += 1
+            println("Error occurred: ", e)
+            log_message(log_file, "ERROR at $(Dates.now()): $e")
+            save_checkpoint!(state; tag="error$(fatal_errs)")
+            # do NOT rethrow; try to continue unless too many fatal errors
+            if fatal_errs < fatal_err_cap
+                @warn "Recovering from exception (attempt $fatal_errs of $fatal_err_cap) and continuing…"
+                continue
+            else
+                @error "Too many fatal errors; exiting loop."
+            end
+
+        finally
+            placed = length(state.x_coords)
+            pn = "$(placed)_$(stem)"
+            minimal_state = create_minimal_state(state)
+            log_message(log_file, "Simulation completed at: $(Dates.now()) (placed=$(placed))")
+            save_checkpoint!(state, tag = "final")
+            try
+                ProgressMeter.finish!(p)
+            catch
+                # ignore if already finished
+            end
         end
 
-    catch e
-        fatal_errs += 1
-        println("Error occurred: ", e)
-        log_message(log_file, "ERROR at $(Dates.now()): $e")
-        save_checkpoint!(state; tag="error$(fatal_errs)")
-        # do NOT rethrow; try to continue unless too many fatal errors
-        if fatal_errs < fatal_err_cap
-            @warn "Recovering from exception (attempt $fatal_errs of $fatal_err_cap) and continuing…"
-            retry  # implicit by falling through to while; nothing special needed
-        else
-            @error "Too many fatal errors; exiting loop."
-        end
-
-    finally
-        placed = length(state.x_coords)
-        pn = "$(placed)_$(stem)"
-        minimal_state = create_minimal_state(state)
-        log_message(log_file, "Simulation completed at: $(Dates.now()) (placed=$(placed))")
-        save_checkpoint!(state, tag = "final")
-        try
-            ProgressMeter.finish!(p)
-        catch
-            # ignore if already finished
-        end
+        println("Simulation complete! placed=$(length(state.x_coords)) / target=$(target)")
+        return state
     end
-
-    println("Simulation complete! placed=$(length(state.x_coords)) / target=$(target)")
-    return state
 end
