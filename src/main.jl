@@ -44,17 +44,17 @@ config = Config(
     box_capacity=15,
     monomer_radius=1,
     grid_size=2000,
-    max_monomers=8000,
+    max_monomers=500,
     # max_monomers=100,
     # file_path=ARGS[1],
     file_path="Claudins/$(fn).txt",
     grid_overlay = false,
     prog = 1
 )
-function main()
+function main(; s = "")
     println("starting the placement...")
     # Pass configuration to simulation
-    state = F(config, log_path = pwd()*"large_strand\\logs\\", save_path = pwd()*"large_strand\\placements\\")
+    state = F(config; log_path = pwd()*"\\large_strand\\logs\\", save_path = pwd()*"\\large_strand\\placements\\", stamp = s)
 
     # Save results or generate plots
     return state
@@ -70,8 +70,8 @@ end
 end
 
 stamp = safe_stamp()
-# # state = main();
-state = deserialize("large_strand\\placements\\8000_wt2_newsep_final.bin")
+state = main(;s = stamp);
+# state = deserialize("large_strand\\placements\\8000_wt2_newsep_final.bin")
 
 backbones = compute_backbone(state; λ=0.6, mode=:geodesic)
 out_dir = joinpath(joinpath("plots", fn))

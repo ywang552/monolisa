@@ -821,8 +821,8 @@ Returns:
 # end
 # strand_starts = Vector{Vector{Float64}}()
 
-function F(config; log_path = joinpath(pwd(), "logs"),
-                 save_path = joinpath(pwd(), "saved_states", "minimal_states"))
+function F(config; log_path = joinpath(pwd(), "logs"), 
+                 save_path = joinpath(pwd(), "saved_states", "minimal_states"), stamp = "")
     # ===== Safenet knobs (tune as you like) =====
     target             = config.max_monomers
     stall_soft         = 5_000           # try local reseed after this many consecutive fails
@@ -840,8 +840,9 @@ function F(config; log_path = joinpath(pwd(), "logs"),
     # quota_restart_interval = 1000   # force a new strand every 1000 placements
 
     # checkpoint cadence
-    N_save       = 100_000                # save every N placements
-    T_save_sec   = 1800.                 # or every 5 minutes
+    # N_save       = 500_000                # save every N placements
+    N_save = 100
+    T_save_sec   = 7200.                 # or every 5 minutes
     last_save_ts = time()
 
     # ===== Init =====
@@ -881,9 +882,9 @@ function F(config; log_path = joinpath(pwd(), "logs"),
     # small helper: safe save checkpoint
     function save_checkpoint!(state; tag="chkpt")
         placed = length(state.x_coords)
-        pn = "$(placed)_$(stem)_$(tag)"
+        pn = "$(stem)_$(stamp)_$(placed)_$(tag)"
         path = joinpath(save_path, pn * ".bin")
-
+        println(path)
         open(path, "w") do io
             serialize(io, state)              # <-- FULL state
         end
