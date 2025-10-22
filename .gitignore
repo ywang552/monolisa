@@ -3,6 +3,10 @@ logs/
 
 # Saved states
 src/HPC/
+src/main2.jl
+src/main3.jl
+src/submit_args.sh
+src/submit.sh
 
 saved_states/
 large_strand/
