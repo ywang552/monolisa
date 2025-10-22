@@ -1049,21 +1049,12 @@ function F(config; log_path = joinpath(pwd(), "logs"),
             else
                 @error "Too many fatal errors; exiting loop."
             end
-
-        finally
-            placed = length(state.x_coords)
-            pn = "$(placed)_$(stem)"
-            minimal_state = create_minimal_state(state)
-            log_message(log_file, "Simulation completed at: $(Dates.now()) (placed=$(placed))")
-            save_checkpoint!(state, tag = "final")
-            try
-                ProgressMeter.finish!(p)
-            catch
-                # ignore if already finished
-            end
         end
-
-        println("Simulation complete! placed=$(length(state.x_coords)) / target=$(target)")
-        return state
     end
+    
+    placed = length(state.x_coords)
+    log_message(log_file, "Simulation completed at: $(Dates.now()) (placed=$(placed))")
+    save_checkpoint!(state, tag = "final")
+    println("Simulation complete! placed=$(length(state.x_coords)) / target=$(target)")
+    return state
 end

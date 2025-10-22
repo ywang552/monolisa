@@ -64,7 +64,6 @@ end
 safe_stamp() = Dates.format(now(), "yyyymmdd-HHMMSS-sss")
 stamp = safe_stamp()
 state = main();
-
 # state = deserialize("large_strand\\placements\\1000000_hc15AF_final.bin")
 
 # backbones = compute_backbone(state; λ=0.6, mode=:geodesic)
