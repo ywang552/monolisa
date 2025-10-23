@@ -5,11 +5,13 @@ logs/
 src/HPC/
 src/main2.jl
 src/main3.jl
-src/submit_args.sh
-src/submit.sh
 src/worker.jl
 src/make_list.jl
 lists/
+src/submit_args.sh
+src/submit.sh
+src/install.sh
+src/submit_all.sh
 
 
 
