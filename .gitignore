@@ -3,16 +3,24 @@ logs/
 
 # Saved states
 src/HPC/
+lists/
+
 src/main2.jl
 src/main3.jl
 src/worker.jl
 src/make_list.jl
-lists/
+src/worker2.jl
+
+src/dependencies.jl
+src/install.jl
 src/submit_args.sh
 src/submit.sh
 src/install.sh
 src/submit_all.sh
-
+src/install.sh
+src/plots_cloud.sh
+src/submit_all.sh
+src/submit_summary_plots.sh
 
 
 saved_states/

@@ -1,38 +1,31 @@
 using Pkg
 
-# Function to read dependencies.jl and extract package names from 'using' statements without using regex
+# Function to read dependencies.jl and extract package names from 'using' statements
 function extract_packages_from_dependencies(dependencies_file)
-    # Read the file line by line
     lines = readlines(dependencies_file)
-    
-    # List to store the package names
     packages = String[]
-    
-    # Iterate over each line
+
     for line in lines
-        # Remove leading/trailing whitespace
         line = strip(line)
-        
-        # Check if the line starts with 'using' and has a package name
         if startswith(line, "using ")
-            # Extract the part after 'using' (the package name)
-            # Split by spaces and take the second part
             parts = split(line)
-            push!(packages, parts[2])
+            pkg = parts[2]
+            push!(packages, pkg)
         end
     end
-    
+
     return packages
 end
 
-# Function to install missing packages
+# Function to install missing packages (modern version)
 function install_packages_from_dependencies(dependencies_file)
-    # Get the list of package names from dependencies.jl
     packages = extract_packages_from_dependencies(dependencies_file)
 
-    # Loop through each package and install if not already installed
+    # Get the list of installed packages in the active environment
+    installed_pkgs = keys(Pkg.dependencies())
+
     for pkg in packages
-        if !(pkg in keys(Pkg.installed()))
+        if !(pkg in installed_pkgs)
             println("Installing package: $pkg")
             try
                 Pkg.add(pkg)
@@ -45,5 +38,5 @@ function install_packages_from_dependencies(dependencies_file)
     end
 end
 
-# Run the function with the path to your dependencies.jl file
-install_packages_from_dependencies(pwd()*"/dependencies.jl")
+# Run the function
+install_packages_from_dependencies(pwd() * "/dependencies.jl")
