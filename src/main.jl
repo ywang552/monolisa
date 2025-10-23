@@ -72,14 +72,14 @@ end
 stamp = safe_stamp()
 state = main(;s = stamp);
 # state = deserialize("large_strand\\placements\\8000_wt2_newsep_final.bin")
-
+state.x_coords
 backbones = compute_backbone(state; λ=0.6, mode=:geodesic)
 out_dir = joinpath("plots", fn)
 if !ispath(out_dir)
     mkdir(out_dir)
 end 
 prefix = joinpath(out_dir, fn)
-generate_plots(state, config; bbs = backbones, output_prefix = prefix*"_$(stamp)", show_contour=true, tm_style=:nothing)
+generate_plots(state; bbs = backbones, output_prefix = prefix*"_$(stamp)", show_contour=true, tm_style=:nothing)
 
 
 

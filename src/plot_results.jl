@@ -1619,7 +1619,7 @@ end
 # Public entry that uses state/config
 # -------------------------
 
-function generate_plots(state::AbstractState, config;
+function generate_plots(state::AbstractState;
                         output_prefix="plots/tmp/",
                         # outline + TM style options (surface here once)
                         show_contour::Bool=true,
@@ -1633,7 +1633,6 @@ function generate_plots(state::AbstractState, config;
     y = state.y_coords
     rot = hasproperty(state, :rotation) ? state.rotation : nothing
     box_size = state.box_size
-    overlay = getfield(config, :grid_overlay)  # avoids getproperty overload surprises
     N = length(x)
     monomer_path = "$(output_prefix)_$(N)_.png"
 
@@ -1644,7 +1643,7 @@ function generate_plots(state::AbstractState, config;
         rotation=rot,
         boxSize=box_size,
         monomer_radius=state.radius,     # in data units
-        show_grid=overlay,
+        show_grid=false,
         lod=:massive,
         tick_step=:auto,
         orient_every=1,
