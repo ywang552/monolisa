@@ -251,3 +251,33 @@ function log_message(log_file::String, message::String)
         println(io, message)
     end
 end
+
+function recompute_K!(state)
+    K   = state.K
+    x   = state.x_coords
+    y   = state.y_coords
+    rot = state.rotation
+
+    # zero out existing counts
+    fill!(K, 0)
+
+    # one contribution per stored edge (u,v), treat u as "parent", v as "child"
+    for (u, v) in state.edges
+        # world angle from u -> v
+        dx = x[v] - x[u]
+        dy = y[v] - y[u]
+        angle_world = mod(atan(dy, dx) * 180 / pi, 360)
+        angle_rel   = calculate_relativeAngle(rot[u], angle_world)
+        a = aidx(angle_rel)          # row index
+
+        # reconstruct ridx using the same relation used at creation:
+        # rot_child ≡ tt_deg - ridx*5  (mod 360)
+        tt_deg = round(Int, atan(-dy, -dx) * 180 / pi)
+        raw    = mod(tt_deg - rot[v], 360)   # 0..359
+        ridx   = Int(floor(raw / 5)) + 1     # 1..72
+
+        K[a, ridx] += 1
+    end
+
+    return nothing
+end

@@ -1350,120 +1350,122 @@ function plot_monomers_lod(
             linecolor=:transparent, aspect_ratio=:equal, legend=false, grid=false,
             dpi=dpi, size=figsize,
             xlim=xlim, ylim=ylim, xticks=xtick_vals, yticks=ytick_vals)
+        
+        draw_backbone!(plt, xT, yT, edges; lc=:black, lw=1.5, alpha=0.9)  # f2
 
-        # --- Backbone (finder + raw draw) -------------------------
-        do_contacts = (draw_contacts === :auto ? (lod != :massive) : draw_contacts) && (r_plot_unit !== nothing)
-        edges = Tuple{Int,Int}[]
-        if do_contacts
-            # Use FULL xT/yT for geometry; don't subsample with idx
-            edges = find_contact_edges(xT, yT, r_plot_unit;
-                                    xlim=xlim, ylim=ylim,
-                                    contact_scale=contact_scale,
-                                    max_edges=contact_max_lines)
-            draw_backbone!(plt, xT, yT, edges; lc=:black, lw=1.5, alpha=0.9)  # f2
-        end
+        # # --- Backbone (finder + raw draw) -------------------------
+        # do_contacts = (draw_contacts === :auto ? (lod != :massive) : draw_contacts) && (r_plot_unit !== nothing)
+        # edges = Tuple{Int,Int}[]
+        # if do_contacts
+        #     # Use FULL xT/yT for geometry; don't subsample with idx
+        #     edges = find_contact_edges(xT, yT, r_plot_unit;
+        #                             xlim=xlim, ylim=ylim,
+        #                             contact_scale=contact_scale,
+        #                             max_edges=contact_max_lines)
+        #     draw_backbone!(plt, xT, yT, edges; lc=:black, lw=1.5, alpha=0.9)  # f2
+        # end
 
 
 
         # --- Standalone backbone figure with colored segments + vertices -------------
-        plt_backbone = plot(; size=(1600,1600), aspect_ratio=:equal, legend=false, xlim=xlim, ylim=ylim)
-        if r_plot_unit !== nothing
-            edges_back = isempty(edges) ? find_contact_edges(xT, yT, r_plot_unit;
-                                                            xlim=xlim, ylim=ylim,
-                                                            contact_scale=contact_scale,
-                                                            max_edges=contact_max_lines) : edges
-            # base backbone
-            draw_backbone!(plt_backbone, xT, yT, edges_back; lc=:black, lw=2, alpha=0.9)
+        # plt_backbone = plot(; size=(1600,1600), aspect_ratio=:equal, legend=false, xlim=xlim, ylim=ylim)
+        # if r_plot_unit !== nothing
+        #     edges_back = isempty(edges) ? find_contact_edges(xT, yT, r_plot_unit;
+        #                                                     xlim=xlim, ylim=ylim,
+        #                                                     contact_scale=contact_scale,
+        #                                                     max_edges=contact_max_lines) : edges
+        #     # base backbone
+        #     draw_backbone!(plt_backbone, xT, yT, edges_back; lc=:black, lw=2, alpha=0.9)
 
-            # DEGREE-BASED FEATURES (f1)
-            # feat = backbone_features(xT, yT, edges_back)
-            # compare_edges(state, edges)
+        #     # DEGREE-BASED FEATURES (f1)
+        #     # feat = backbone_features(xT, yT, edges_back)
+        #     # compare_edges(state, edges)
 
-            # 💡 CURVATURE REFINEMENT (split at turning points)
-            # 1) detect + split with looser params
-            # segments2, tverts = refine_segments_by_curvature(
-            #     xT, yT, feat.segments;
-            #     angle_thresh_deg = 30.0,   # ↓ from 60
-            #     min_gap = 1                # ↓ from 2
-            # )
+        #     # 💡 CURVATURE REFINEMENT (split at turning points)
+        #     # 1) detect + split with looser params
+        #     # segments2, tverts = refine_segments_by_curvature(
+        #     #     xT, yT, feat.segments;
+        #     #     angle_thresh_deg = 30.0,   # ↓ from 60
+        #     #     min_gap = 1                # ↓ from 2
+        #     # )
 
             
 
-            tverts = turning_vertices_from_edges(xT, yT, edges_back; angle_thresh_deg=30.0)
-            @info "Graph-turns" n_turns = length(tverts)
+        #     tverts = turning_vertices_from_edges(xT, yT, edges_back; angle_thresh_deg=30.0)
+        #     @info "Graph-turns" n_turns = length(tverts)
 
-            # A) Segment length: smooth density
-            seg_lengths, plt_len = plot_segment_length_density(
-                xT, yT, feat.segments;
-            )
+        #     # A) Segment length: smooth density
+        #     seg_lengths, plt_len = plot_segment_length_density(
+        #         xT, yT, feat.segments;
+        #     )
 
-            # D) Turning angles: smooth density (graph-based)
-            _, dev_deg_all = graph_turn_deviation_deg(xT, yT, edges_back)
-            plt_ta = plot_turning_angle_density(dev_deg_all;
-                save_path = (save_path === nothing ? nothing : replace(save_path, ".png" => "_turning_angles_density.png"))
-            )
+        #     # D) Turning angles: smooth density (graph-based)
+        #     _, dev_deg_all = graph_turn_deviation_deg(xT, yT, edges_back)
+        #     plt_ta = plot_turning_angle_density(dev_deg_all;
+        #         save_path = (save_path === nothing ? nothing : replace(save_path, ".png" => "_turning_angles_density.png"))
+        #     )
 
-            ###############
-            # (B) Segment curvature stats (per segment)
-            ###############
-            curv_stats = [ segment_curvature_stats(xT, yT, seg) for seg in feat.segments ]
-            totals  = getindex.(curv_stats, 1)
-            means   = getindex.(curv_stats, 2)
-            dens    = getindex.(curv_stats, 3)
+        #     ###############
+        #     # (B) Segment curvature stats (per segment)
+        #     ###############
+        #     curv_stats = [ segment_curvature_stats(xT, yT, seg) for seg in feat.segments ]
+        #     totals  = getindex.(curv_stats, 1)
+        #     means   = getindex.(curv_stats, 2)
+        #     dens    = getindex.(curv_stats, 3)
 
-            plt_curv_total = histogram(totals; bins=30, xlabel="total |turn| (rad)", ylabel="freq",
-                                    title="Per-segment total curvature", legend=false)
-            plt_curv_mean  = histogram(means;  bins=30, xlabel="mean |turn| per interior (rad)", ylabel="freq",
-                                    title="Per-segment mean curvature", legend=false)
-            plt_curv_dens  = histogram(dens;   bins=30, xlabel="curvature density (rad / unit length)", ylabel="freq",
-                                    title="Per-segment curvature density", legend=false)
+        #     plt_curv_total = histogram(totals; bins=30, xlabel="total |turn| (rad)", ylabel="freq",
+        #                             title="Per-segment total curvature", legend=false)
+        #     plt_curv_mean  = histogram(means;  bins=30, xlabel="mean |turn| per interior (rad)", ylabel="freq",
+        #                             title="Per-segment mean curvature", legend=false)
+        #     plt_curv_dens  = histogram(dens;   bins=30, xlabel="curvature density (rad / unit length)", ylabel="freq",
+        #                             title="Per-segment curvature density", legend=false)
 
-            if save_path !== nothing
-                savefig(plt_curv_total, replace(save_path, ".png" => "_curv_total_hist.png"))
-                savefig(plt_curv_mean,  replace(save_path, ".png" => "_curv_mean_hist.png"))
-                savefig(plt_curv_dens,  replace(save_path, ".png" => "_curv_density_hist.png"))
-            end
+        #     if save_path !== nothing
+        #         savefig(plt_curv_total, replace(save_path, ".png" => "_curv_total_hist.png"))
+        #         savefig(plt_curv_mean,  replace(save_path, ".png" => "_curv_mean_hist.png"))
+        #         savefig(plt_curv_dens,  replace(save_path, ".png" => "_curv_density_hist.png"))
+        #     end
 
-            ###############
-            # (C) Junction and leaf vertices
-            ###############
-            deg = degree_map(edges_back)
-            leaf_vertices    = [v for (v,d) in deg if d == 1]
-            junction_vertices = [v for (v,d) in deg if d ≥ 3]
-            @info "Graph degrees" n_leaf=length(leaf_vertices) n_junction=length(junction_vertices)
+        #     ###############
+        #     # (C) Junction and leaf vertices
+        #     ###############
+        #     deg = degree_map(edges_back)
+        #     leaf_vertices    = [v for (v,d) in deg if d == 1]
+        #     junction_vertices = [v for (v,d) in deg if d ≥ 3]
+        #     @info "Graph degrees" n_leaf=length(leaf_vertices) n_junction=length(junction_vertices)
 
-            # Optional: branching (degree) frequency at junctions
-            branching_counts = [deg[v] for v in junction_vertices]
-            if !isempty(branching_counts)
-                m = maximum(branching_counts)
-                plt_branches = histogram(branching_counts; bins=1:1:m+1,
-                    xticks=(1:m, string.(1:m)),
-                    xlabel="degree at junction", ylabel="freq", title="Junction branching degree", legend=false)
-                if save_path !== nothing
-                    savefig(plt_branches, replace(save_path, ".png" => "_junction_branching_hist.png"))
-                end
-            end
+        #     # Optional: branching (degree) frequency at junctions
+        #     branching_counts = [deg[v] for v in junction_vertices]
+        #     if !isempty(branching_counts)
+        #         m = maximum(branching_counts)
+        #         plt_branches = histogram(branching_counts; bins=1:1:m+1,
+        #             xticks=(1:m, string.(1:m)),
+        #             xlabel="degree at junction", ylabel="freq", title="Junction branching degree", legend=false)
+        #         if save_path !== nothing
+        #             savefig(plt_branches, replace(save_path, ".png" => "_junction_branching_hist.png"))
+        #         end
+        #     end
 
 
-            # 2) overlay: PASS turning_vertices directly (so they’re always shown)
-            overlay_segments_vertices!(
-                plt_backbone, xT, yT,
-                (; segments = feat.segments,
-                endpoints = feat.endpoints,
-                junctions = feat.junctions);
-                segment_mode = :cmap,
-                v_ms = 8,
-                turning_vertices = tverts,       # <— NEW: wire them in
-                turning_color = :orange,
-                turning_ms = 4,
-                turning_marker = :square
-            )
+        #     # 2) overlay: PASS turning_vertices directly (so they’re always shown)
+        #     overlay_segments_vertices!(
+        #         plt_backbone, xT, yT,
+        #         (; segments = feat.segments,
+        #         endpoints = feat.endpoints,
+        #         junctions = feat.junctions);
+        #         segment_mode = :cmap,
+        #         v_ms = 8,
+        #         turning_vertices = tverts,       # <— NEW: wire them in
+        #         turning_color = :orange,
+        #         turning_ms = 4,
+        #         turning_marker = :square
+        #     )
             
 
-            if save_path !== nothing
-                savefig(plt_backbone, replace(save_path, ".png" => "_backbone.png"))
-            end
-        end
+        #     if save_path !== nothing
+        #         savefig(plt_backbone, replace(save_path, ".png" => "_backbone.png"))
+        #     end
+        # end
 
         # compass legend
         begin
@@ -1556,13 +1558,16 @@ function plot_monomers_lod(
             plot!(plt, [first(xlim), x_end], [yg, yg], lw=0.5, alpha=0.3, linecolor=:gray, label=false)
         end
     end
+    display(plt)
 
     xlabel!(plt, "Distance ($(unit_label(u)))")
     ylabel!(plt, "Distance ($(unit_label(u)))")
 
     if save_path !== nothing
-        savefig(plt, save_path)
-        println("Plot saved to: $save_path")
+        save_path_strand   = replace(save_path, ".png" => "strand.png")
+
+        savefig(plt, save_path_strand)
+        println("Plot saved to: $save_path_strand")
     end
 
     return plt
@@ -1644,7 +1649,7 @@ function generate_plots(state::AbstractState;
         boxSize=box_size,
         monomer_radius=state.radius,     # in data units
         show_grid=false,
-        lod=:massive,
+        lod=:small,
         tick_step=:auto,
         orient_every=1,
         mode=:min,

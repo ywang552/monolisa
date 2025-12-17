@@ -4,7 +4,7 @@ longest_backbone_len(state; λ=0.6, mode=:geodesic) = begin
     bb = compute_backbone(state; λ=λ, mode=mode)
     paths = bb isa Tuple ? bb[1] : bb
     isempty(paths) && return 0
-    length(paths)
+    maximum(length(p) for p in values(paths)) - 1
 end
 
 # ---- 2) Collect lengths by type (same layout as your area collector) ----

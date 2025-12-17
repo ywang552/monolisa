@@ -171,27 +171,31 @@ function add_monomer(state::SimulationState, config::Config, boxIndx::Int)
     rot = mod(tt_deg - ridx * 5, 360)               # 0..359, stays Int
     push!(rotation, rot)
 
-    for a in angles_for_pos
+    # edges = actual neighbors
+    edges_to_add = unique(touch_contacts)
+
+    # explicitly guarantee parent is included
+    parent = tar[idx]
+    if parent != new_index && !(parent in edges_to_add)
+        push!(edges_to_add, parent)
+    end
+
+    # update only true edges
+    for v in edges_to_add
+        dxv = new_x - x_coords[v]
+        dyv = new_y - y_coords[v]
+        angle_world = mod(atan(dyv, dxv) * 180 / pi, 360)
+        angle_rel = calculate_relativeAngle(rotation[v], angle_world)
+        a = aidx(angle_rel)
+
         K[a, ridx] += 1
-    end
 
-    unique!(touch_contacts)  # remove duplicates
-
-    # always ensure parent is included
-    parent = tar[idx]
-    if parent != new_index && !(parent in touch_contacts)
-        push!(touch_contacts, parent)
-    end
-
-    parent = tar[idx]
-    @inbounds for v in touch_contacts
-        v == new_index && continue
-        u = v < new_index ? v : new_index
-        w = v < new_index ? new_index : v
-        push!(state.edges, (u, w))
-        state.degree[v]        += 1
+        # add edge
+        push!(state.edges, v < new_index ? (v, new_index) : (new_index, v))
+        state.degree[v] += 1
         state.degree[new_index] += 1
     end
+
 
 
 
@@ -1048,6 +1052,7 @@ function F(config; log_path = joinpath(pwd(), "logs"),
                 @warn "Recovering from exception (attempt $fatal_errs of $fatal_err_cap) and continuing…"
                 continue
             else
+                break
                 @error "Too many fatal errors; exiting loop."
             end
         end

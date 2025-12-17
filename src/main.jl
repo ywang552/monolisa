@@ -36,7 +36,7 @@ function setup_project_folders()
 end
 
 # setup_project_folders()
-fn = "wt2_newsep"
+fn = "hc15AF"
 config = Config(
     ft=0.0005,
     box_size=10,
@@ -44,7 +44,7 @@ config = Config(
     box_capacity=15,
     monomer_radius=1,
     grid_size=2000,
-    max_monomers=500,
+    max_monomers=15,
     # max_monomers=100,
     # file_path=ARGS[1],
     file_path="Claudins/$(fn).txt",
@@ -71,72 +71,81 @@ end
 
 stamp = safe_stamp()
 state = main(;s = stamp);
+recompute_K!(state)
+df = DataFrame(
+    x = state.x_coords,
+    y = state.y_coords,
+    rotation = state.rotation,
+)
+
+
+CSV.write("data\\$(fn).csv", df)
+
+
 # state = deserialize("large_strand\\placements\\8000_wt2_newsep_final.bin")
-state.x_coords
-backbones = compute_backbone(state; λ=0.6, mode=:geodesic)
-out_dir = joinpath("plots", fn)
-if !ispath(out_dir)
-    mkdir(out_dir)
-end 
-prefix = joinpath(out_dir, fn)
-generate_plots(state; bbs = backbones, output_prefix = prefix*"_$(stamp)", show_contour=true, tm_style=:nothing)
+# state.x_coords
+# backbones = compute_backbone(state; λ=0.6, mode=:geodesic)
+# out_dir = joinpath("plots", fn)
+# if !ispath(out_dir)
+#     mkdir(out_dir)
+# end 
+# prefix = joinpath(out_dir, fn)
+# generate_plots(state; bbs = backbones, output_prefix = prefix*"_$(stamp)", show_contour=true, tm_style=:arcs)
 
+# idx = findall(x->x!=0, state.K )
+# idx
 
+# # Folder with your .bin states
+# data_dir = joinpath("large_strand","placements")
+# # Customize how filenames map to claudin labels, if needed
+# patterns = Dict(
+#     # "C4" => "C4",
+#     # "C2" => "C2",
+#     "hc5AF" => "C5",
+#     "wt2_newsep" => "C2",
+#     "hc15" => "C15",
+#     "c4_7" => "C4",
 
+#     # add more keys if filenames use other hints, e.g. "claudin4" => "C4"
+# )
 
+# out_dir = joinpath("plots", "cdf")
+# if !ispath(out_dir)
+#     mkdir(out_dir)
+# end 
+# area_floor  = 8.
+# groups = load_states_grouped(data_dir; patterns=patterns)
 
+# plots_hist = plot_hist_longest_by_type(groups; λ=0.6, mode=:geodesic, density=true)
+# ps = plot_histograms_by_claudin(data_dir, patterns, density = false, area_floor = area_floor)
 
-# Folder with your .bin states
-data_dir = joinpath("large_strand","placements")
-# Customize how filenames map to claudin labels, if needed
-patterns = Dict(
-    # "C4" => "C4",
-    # "C2" => "C2",
-    "hc5AF" => "C5",
-    "wt2_newsep" => "C2",
-    "hc15" => "C15",
-    "c4_7" => "C4",
+# for p in keys(ps)
+#     local prefix = joinpath(out_dir, "$(p)")
+#     savefig(ps[p], "$(prefix)_MeshAreaHistogram.png")
+#     savefig(plots_hist[p], "$(prefix)_LongestStrandHistogram.png")
+# end 
 
-    # add more keys if filenames use other hints, e.g. "claudin4" => "C4"
-)
+# plt = plot_cdf_clusters_by_type(groups;
+#     colors=TRUE_COLORS,
+#     area_floor=8.2,
+#     use_ccdf=true,
+#     focus_top=(0.7, 1.0),
+# )
+# prefix = joinpath(out_dir, "mesh_area_cdf_zoomed.png")
+# savefig(plt, prefix)
 
-out_dir = joinpath("plots", "cdf")
-if !ispath(out_dir)
-    mkdir(out_dir)
-end 
-area_floor  = 8.
-groups = load_states_grouped(data_dir; patterns=patterns)
+# plt = plot_cdf_clusters_by_type(groups;
+#     colors=TRUE_COLORS,
+#     area_floor=8.2,
+#     use_ccdf=true,
+#     focus_top=(0.0, 1.0), 
+# )
+# prefix = joinpath(out_dir, "mesh_area_cdf.png")
+# savefig(plt, prefix)
+# plt_cdf = plot_cdf_longest_by_type(groups; λ=0.6, mode=:geodesic, use_ccdf=false)
 
-plots_hist = plot_hist_longest_by_type(groups; λ=0.6, mode=:geodesic, density=true)
-ps = plot_histograms_by_claudin(data_dir, patterns, density = false, area_floor = area_floor)
-
-for p in keys(ps)
-    local prefix = joinpath(out_dir, "$(p)")
-    savefig(ps[p], "$(prefix)_MeshAreaHistogram.png")
-    savefig(plots_hist[p], "$(prefix)_LongestStrandHistogram.png")
-end 
-
-plt = plot_cdf_clusters_by_type(groups;
-    colors=TRUE_COLORS,
-    area_floor=8.2,
-    use_ccdf=true,
-    focus_top=(0.7, 1.0),
-)
-prefix = joinpath(out_dir, "mesh_area_cdf_zoomed.png")
-savefig(plt, prefix)
-
-plt = plot_cdf_clusters_by_type(groups;
-    colors=TRUE_COLORS,
-    area_floor=8.2,
-    use_ccdf=true,
-    focus_top=(0.0, 1.0), 
-)
-prefix = joinpath(out_dir, "mesh_area_cdf.png")
-savefig(plt, prefix)
-plt_cdf = plot_cdf_longest_by_type(groups; λ=0.6, mode=:geodesic, use_ccdf=false)
-
-prefix = joinpath(out_dir, "longest_strand_cdf.png")
-savefig(plt_cdf, prefix)
+# prefix = joinpath(out_dir, "longest_strand_cdf.png")
+# savefig(plt_cdf, prefix)
 
 
 # """
